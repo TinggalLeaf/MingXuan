@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from "react";
 import type { BirthProfile } from "mingyu-core";
 import { paipanDefaults } from "@/lib/config";
@@ -9,6 +8,8 @@ import {
   profileSummary,
   type SavedProfile,
 } from "@/lib/profiles";
+import { searchLocation, type LocationResult } from "@/lib/location";
+import { Search, Loader2 } from "lucide-react";
 
 export const SHICHEN_OPTIONS = [
   { value: 0, label: "早子时 00:00–01:00" },
@@ -36,7 +37,7 @@ export interface BirthFormProps {
 const currentYear = new Date().getFullYear();
 
 /**
- * 共享出生档案表单：公历/农历、时辰/精确时分、真太阳时开关。
+ * 共享出生档案表单：公历/农历、时辰/精确时分、真太阳时开关、出生地点搜索。
  * 输出 mingyu-core 的 BirthProfile。
  */
 export default function BirthForm({
@@ -58,11 +59,19 @@ export default function BirthForm({
   const [minute, setMinute] = useState(0);
   const [useTrueSolarTime, setUseTrueSolarTime] = useState(paipanDefaults.trueSolarTime);
   const [longitude, setLongitude] = useState("116.40");
+  const [latitude, setLatitude] = useState("39.90");
+  const [locationName, setLocationName] = useState("");
   const [error, setError] = useState("");
   const [saved, setSaved] = useState<SavedProfile[]>([]);
   const [showSave, setShowSave] = useState(false);
   const [saveRelation, setSaveRelation] = useState<SavedProfile["relation"]>("本人");
   const [savedTip, setSavedTip] = useState("");
+
+  // 地点搜索
+  const [locQuery, setLocQuery] = useState("");
+  const [locResults, setLocResults] = useState<LocationResult[]>([]);
+  const [locLoading, setLocLoading] = useState(false);
+  const [locOpen, setLocOpen] = useState(false);
 
   useEffect(() => {
     setSaved(loadProfiles());
@@ -70,6 +79,33 @@ export default function BirthForm({
     window.addEventListener("mx-profiles-changed", onChange);
     return () => window.removeEventListener("mx-profiles-changed", onChange);
   }, []);
+
+  // 地点输入防抖搜索
+  useEffect(() => {
+    if (!locQuery.trim() || locQuery.trim().length < 1) {
+      setLocResults([]);
+      return;
+    }
+    const ctrl = setTimeout(async () => {
+      setLocLoading(true);
+      try {
+        const r = await searchLocation(locQuery);
+        setLocResults(r);
+      } finally {
+        setLocLoading(false);
+      }
+    }, 300);
+    return () => clearTimeout(ctrl);
+  }, [locQuery]);
+
+  function applyLocation(r: LocationResult) {
+    setLocationName(r.name);
+    setLongitude(r.longitude.toFixed(4));
+    setLatitude(r.latitude.toFixed(4));
+    setLocOpen(false);
+    setLocQuery("");
+    setLocResults([]);
+  }
 
   /** 加载已存命盘到表单 */
   function applySaved(p: SavedProfile) {
@@ -90,7 +126,10 @@ export default function BirthForm({
       setTimeIndex(b.timeIndex);
     }
     setUseTrueSolarTime(Boolean(b.useTrueSolarTime));
-    if (b.location?.longitude !== undefined) setLongitude(String(b.location.longitude));
+    if (b.location?.longitude !== undefined) {
+      setLongitude(String(b.location.longitude));
+      if (b.location.latitude !== undefined) setLatitude(String(b.location.latitude));
+    }
   }
 
   /** 当前表单值 → BirthProfile（提交与保存共用） */
@@ -112,7 +151,11 @@ export default function BirthForm({
       profile.timeIndex = timeIndex;
     }
     if (useTrueSolarTime) {
-      profile.location = { longitude: Number(longitude), timezone: 8 };
+      profile.location = {
+        longitude: Number(longitude),
+        latitude: Number(latitude) || 0,
+        timezone: 8,
+      };
     }
     return profile;
   }
@@ -327,6 +370,7 @@ export default function BirthForm({
         )}
       </div>
 
+      {/* 出生地点 + 经度 */}
       <div className="space-y-2 rounded-lg border border-gold-500/15 p-3">
         <label className="flex items-center gap-2 text-sm text-paper-300">
           <input
@@ -338,14 +382,72 @@ export default function BirthForm({
           使用真太阳时（需经度，用于精确排盘）
         </label>
         {useTrueSolarTime && (
-          <label className="block">
-            <span className="console-label mb-1 block">LON · 出生地经度（°E，如北京 116.40）</span>
-            <input
-              className="input-xuan w-full"
-              value={longitude}
-              onChange={(e) => setLongitude(e.target.value)}
-            />
-          </label>
+          <>
+            <label className="block">
+              <span className="console-label mb-1 block">LOCATION · 出生地点（搜索后自动填经纬度）</span>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-paper-500" />
+                <input
+                  className="input-xuan w-full pl-9"
+                  value={locQuery || locationName}
+                  onFocus={() => setLocOpen(true)}
+                  onChange={(e) => {
+                    setLocQuery(e.target.value);
+                    setLocOpen(true);
+                  }}
+                  placeholder="输入城市/区县名，如 北京、浦东、徐汇"
+                />
+                {locOpen && (locQuery || locResults.length > 0) && (
+                  <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-72 overflow-y-auto rounded-lg border border-gold-500/25 bg-ink-950 shadow-xl">
+                    {locLoading && (
+                      <div className="flex items-center gap-2 px-3 py-2 text-xs text-paper-400">
+                        <Loader2 className="h-3 w-3 animate-spin" />搜索中…
+                      </div>
+                    )}
+                    {locResults.map((r, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => applyLocation(r)}
+                        className="flex w-full items-start justify-between gap-3 border-b border-ink-700/60 px-3 py-2 text-left text-xs hover:bg-ink-800/80 last:border-b-0"
+                      >
+                        <span className="min-w-0 flex-1 truncate text-paper-100">{r.name}</span>
+                        <span className="shrink-0 font-mono text-paper-400">
+                          {r.longitude.toFixed(4)}, {r.latitude.toFixed(4)}
+                          <span className="ml-1 text-[10px] text-gold-400">{r.source}</span>
+                        </span>
+                      </button>
+                    ))}
+                    {!locLoading && locResults.length === 0 && locQuery && (
+                      <div className="px-3 py-2 text-xs text-paper-500">
+                        无结果。可到「设置 → 地点服务」配置高德/百度 API Key。
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="console-label mb-1 block">LON · 经度（°E）</span>
+                <input
+                  className="input-xuan w-full font-mono text-sm"
+                  value={longitude}
+                  onChange={(e) => setLongitude(e.target.value)}
+                  placeholder="116.40"
+                />
+              </label>
+              <label className="block">
+                <span className="console-label mb-1 block">LAT · 纬度（°N）</span>
+                <input
+                  className="input-xuan w-full font-mono text-sm"
+                  value={latitude}
+                  onChange={(e) => setLatitude(e.target.value)}
+                  placeholder="39.90"
+                />
+              </label>
+            </div>
+          </>
         )}
       </div>
 
