@@ -1,0 +1,162 @@
+name: Release
+
+on:
+  push:
+    branches: [main] # release-please 维护 Release PR
+    tags: ['v*'] # 打 tag 触发全平台构建发布
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（如 v0.1.0），需已存在；手动触发时请把 Ref 也选成该 tag（main 上的运行无权上传资产）'
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          release-type: simple
+          # release-please-config.json / .release-please-manifest.json 位于仓库根目录
+
+      # 合并 Release PR 后 release-please 已建好 tag/Release，但 GITHUB_TOKEN 创建的
+      # tag 不会再触发 push 事件，且实测 GITHUB_TOKEN 只有在 tag 引用上的运行里才能
+      # 上传 Release 资产（main 上的运行 PATCH/上传均 403），因此显式在新 tag 上派发构建
+      - name: Dispatch build on the new tag
+        if: steps.rp.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run release.yml --ref "${{ steps.rp.outputs.tag_name }}" -f tag="${{ steps.rp.outputs.tag_name }}"
+
+  build:
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, label: windows-x64, bundles: nsis }
+          - { os: windows-11-arm, target: aarch64-pc-windows-msvc, label: windows-arm64, bundles: nsis }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, label: linux-x64, bundles: deb,appimage }
+          - { os: macos-latest, target: aarch64-apple-darwin, label: macos-arm64, bundles: dmg }
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libudev-dev pkg-config patchelf libxdo-dev xdg-utils
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri app (installers)
+        uses: tauri-apps/tauri-action@v0
+        with:
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      # ============== Portable variants ==============
+
+      # Windows portable (zip the raw exe so it can be run without installer)
+      - name: Package portable (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = "src-tauri/target/${{ matrix.target }}/release/ming-xuan.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Error "Binary not found at $exe"; exit 1
+          }
+          Compress-Archive -Path $exe -DestinationPath "MingXuan_${env:TAG}_${{ matrix.label }}_portable.zip" -Force
+
+      # Linux portable (tar.gz of raw binary)
+      - name: Package portable (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          BIN="src-tauri/target/${{ matrix.target }}/release/ming-xuan"
+          if [ ! -f "$BIN" ]; then
+            echo "::error::Binary not found at $BIN"; exit 1
+          fi
+          tar -C "src-tauri/target/${{ matrix.target }}/release" -czf "MingXuan_${TAG}_${{ matrix.label }}_portable.tar.gz" ming-xuan
+
+      # macOS portable (.app bundle zipped；productName 为「明玄」)
+      - name: Package portable (macOS .app)
+        if: runner.os == 'macOS'
+        run: |
+          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/明玄.app"
+          if [ ! -d "$APP" ]; then
+            echo "::error::App bundle not found at $APP"; exit 1
+          fi
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "MingXuan_${TAG}_${{ matrix.label }}_portable.zip"
+
+      # 只用 gh CLI 上传资产，绝不 PATCH Release：实测 GITHUB_TOKEN 对之前的运行
+      # 创建的 Release 只要 PATCH 里带 tag_name/target_commitish 就 403
+      # （softprops/action-gh-release 的 update 路径必带这两个字段，故不可用）。
+      # Release 的名称和说明由 release-please 创建时已填好，无需改动。
+      # 注意：每个平台只生成自己 OS 的便携版格式，glob 模式未匹配的文件名
+      # 直接交给 gh 会把它当成字面参数导致失败；因此每 OS 单独拼装本平台真实
+      # 存在的文件列表。
+      - name: Upload release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          bundle_dir="src-tauri/target/${{ matrix.target }}/release/bundle"
+          case "${{ matrix.os }}" in
+            windows-*)
+              files=(
+                "$bundle_dir/nsis/"*.exe
+                "MingXuan_${TAG}_${{ matrix.label }}_portable.zip"
+              )
+              ;;
+            ubuntu-*|linux-*)
+              files=(
+                "$bundle_dir/deb/"*.deb
+                "$bundle_dir/appimage/"*.AppImage
+                "MingXuan_${TAG}_${{ matrix.label }}_portable.tar.gz"
+              )
+              ;;
+            macos-*)
+              files=(
+                "$bundle_dir/dmg/"*.dmg
+                "$bundle_dir/macos/"*.app.tar.gz
+                "MingXuan_${TAG}_${{ matrix.label }}_portable.zip"
+              )
+              ;;
+          esac
+          ((${#files[@]})) || { echo "::error::no artifacts found for ${{ matrix.label }}"; exit 1; }
+          echo "Uploading ${#files[@]} file(s) for ${{ matrix.label }}:"
+          printf '  %s\n' "${files[@]}"
+          gh release upload "$TAG" "${files[@]}" --clobber
