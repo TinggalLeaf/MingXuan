@@ -36,7 +36,7 @@ jobs:
         if: steps.rp.outputs.release_created == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run release.yml --ref "${{ steps.rp.outputs.tag_name }}" -f tag="${{ steps.rp.outputs.tag_name }}"
+        run: gh workflow run release.yml -R "${{ github.repository }}" --ref "${{ steps.rp.outputs.tag_name }}" -f tag="${{ steps.rp.outputs.tag_name }}"
 
   build:
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
