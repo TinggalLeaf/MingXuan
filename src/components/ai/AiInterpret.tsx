@@ -112,38 +112,40 @@ export default function AiInterpret({ topic, data, question, className = "" }: A
         )}
       </div>
 
-      {/* 来源与置信度徽章 */}
-      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-gold-500/15 bg-ink-900/40 p-3 text-xs">
-        <span className="console-label">来源</span>
-        {meta.sources.map((s) => (
-          <span
-            key={s}
-            className="rounded border border-cyber-400/30 bg-cyber-400/10 px-2 py-0.5 text-cyber-300"
-            title={`基于「${s}」维度的结构化数据`}
-          >
-            {s}
+      {/* 来源与置信度徽章 —— 仅在已开始 AI 解读后显示 */}
+      {started && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-gold-500/15 bg-ink-900/40 p-3 text-xs">
+          <span className="console-label">来源</span>
+          {meta.sources.map((s) => (
+            <span
+              key={s}
+              className="rounded border border-cyber-400/30 bg-cyber-400/10 px-2 py-0.5 text-cyber-300"
+              title={`基于「${s}」维度的结构化数据`}
+            >
+              {s}
+            </span>
+          ))}
+          <span className="ml-auto flex items-center gap-2">
+            <span className="console-label">置信度</span>
+            <span
+              className={`rounded px-2 py-0.5 font-bold ${
+                meta.confidence === "high"
+                  ? "border border-jade-400/40 bg-jade-400/15 text-jade-300"
+                  : meta.confidence === "medium"
+                    ? "border border-gold-500/40 bg-gold-500/15 text-gold-300"
+                    : "border border-cinnabar-500/40 bg-cinnabar-500/15 text-cinnabar-300"
+              }`}
+              title={`基于数据完整度估算：${(meta.confidenceValue * 100).toFixed(0)}%`}
+            >
+              {meta.confidence === "high" ? "高" : meta.confidence === "medium" ? "中" : "低"}
+              <span className="ml-1 text-[10px] opacity-70">{(meta.confidenceValue * 100).toFixed(0)}%</span>
+            </span>
+            {!meta.hasStructuredData && (
+              <span className="text-[10px] text-paper-500">· 非结构化数据</span>
+            )}
           </span>
-        ))}
-        <span className="ml-auto flex items-center gap-2">
-          <span className="console-label">置信度</span>
-          <span
-            className={`rounded px-2 py-0.5 font-bold ${
-              meta.confidence === "high"
-                ? "border border-jade-400/40 bg-jade-400/15 text-jade-300"
-                : meta.confidence === "medium"
-                  ? "border border-gold-500/40 bg-gold-500/15 text-gold-300"
-                  : "border border-cinnabar-500/40 bg-cinnabar-500/15 text-cinnabar-300"
-            }`}
-            title={`基于数据完整度估算：${(meta.confidenceValue * 100).toFixed(0)}%`}
-          >
-            {meta.confidence === "high" ? "高" : meta.confidence === "medium" ? "中" : "低"}
-            <span className="ml-1 text-[10px] opacity-70">{(meta.confidenceValue * 100).toFixed(0)}%</span>
-          </span>
-          {!meta.hasStructuredData && (
-            <span className="text-[10px] text-paper-500">· 非结构化数据</span>
-          )}
-        </span>
-      </div>
+        </div>
+      )}
 
       {!started && (
         <div className="flex flex-col items-center gap-3 py-4 text-center">
