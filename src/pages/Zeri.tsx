@@ -375,7 +375,7 @@ export default function Zeri() {
       </Section>
 
       {(data.dimu?.length || data.dimuPoem?.length || data.harvestPoem?.length) ? (
-        <Section title="⑦ 地母经与丰歉歌">
+        <Section title="⑦ 地母经与丰歉歌" wide>
           {data.dimu && data.dimu.length > 0 && (
             <div className="mb-3">
               <div className="console-label mb-1">地母经卜曰</div>
