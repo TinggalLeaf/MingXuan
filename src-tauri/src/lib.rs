@@ -240,18 +240,293 @@ fn write_profiles(app: tauri::AppHandle, json: String) -> Result<(), String> {
     std::fs::write(&path, json).map_err(|e| format!("写入存档失败：{e}"))
 }
 
+// ===== 地点搜索（高德 / 百度 / 黄历网）=====
+//
+// 由 Rust 后端直接发请求，绕过浏览器 CORS；同时保护 API Key。
+// 前端经 invoke 调用，无需在浏览器暴露密钥。
+
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct LocationSearchArgs {
+    provider: String,
+    api_key: String,
+    q: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct LocationResultDto {
+    name: String,
+    longitude: f64,
+    latitude: f64,
+    timezone: i32,
+    code: Option<String>,
+    source: String,
+}
+
+/// 高德 POI 关键字搜索
+async fn amap_search(api_key: &str, q: &str) -> Result<Vec<LocationResultDto>, String> {
+    let url = format!(
+        "https://restapi.amap.com/v3/place/text?key={}&keywords={}&offset=10&extensions=base",
+        urlencoding(api_key),
+        urlencoding(q),
+    );
+    let r = client()
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("高德请求失败：{e}"))?;
+    let v: serde_json::Value = r.json().await.map_err(|e| format!("解析失败：{e}"))?;
+    let mut out: Vec<LocationResultDto> = Vec::new();
+    if let Some(pois) = v.get("pois").and_then(|x| x.as_array()) {
+        for p in pois {
+            let name = p
+                .get("name")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            let address = p
+                .get("address")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            let location = p.get("location").and_then(|x| x.as_str()).unwrap_or("");
+            let code = p.get("adcode").and_then(|x| x.as_str()).map(|s| s.to_string());
+            let parts: Vec<&str> = location.split(',').collect();
+            if parts.len() != 2 {
+                continue;
+            }
+            let lng: f64 = parts[0].parse().unwrap_or(0.0);
+            let lat: f64 = parts[1].parse().unwrap_or(0.0);
+            let tz = (lng / 15.0).round() as i32;
+            out.push(LocationResultDto {
+                name: format!("{} {}", name, address).trim().to_string(),
+                longitude: lng,
+                latitude: lat,
+                timezone: tz,
+                code,
+                source: "amap".to_string(),
+            });
+        }
+    }
+    if let Some(cities) = v
+        .get("suggestion")
+        .and_then(|x| x.get("cities"))
+        .and_then(|x| x.as_array())
+    {
+        for c in cities {
+            if let Some(name) = c.get("name").and_then(|x| x.as_str()) {
+                let location = c
+                .get("location")
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
+                let code = c.get("adcode").and_then(|x| x.as_str()).map(|s| s.to_string());
+                let parts: Vec<&str> = location.split(',').collect();
+                if parts.len() != 2 {
+                    continue;
+                }
+                let lng: f64 = parts[0].parse().unwrap_or(0.0);
+                let lat: f64 = parts[1].parse().unwrap_or(0.0);
+                let tz = (lng / 15.0).round() as i32;
+                out.push(LocationResultDto {
+                    name: name.to_string(),
+                    longitude: lng,
+                    latitude: lat,
+                    timezone: tz,
+                    code,
+                    source: "amap".to_string(),
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// 百度 Place 搜索
+async fn baidu_search(api_key: &str, q: &str) -> Result<Vec<LocationResultDto>, String> {
+    let url = format!(
+        "https://api.map.baidu.com/place/v2/search?ak={}&output=json&query={}&region=%E5%85%A8%E5%9B%BD",
+        urlencoding(api_key),
+        urlencoding(q),
+    );
+    let r = client()
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("百度请求失败：{e}"))?;
+    let v: serde_json::Value = r.json().await.map_err(|e| format!("解析失败：{e}"))?;
+    let mut out: Vec<LocationResultDto> = Vec::new();
+    if v.get("status").and_then(|x| x.as_i64()) == Some(0) {
+        if let Some(results) = v.get("results").and_then(|x| x.as_array()) {
+            for r in results {
+                let name = r.get("name").and_then(|x| x.as_str()).unwrap_or("");
+                let address = r.get("address").and_then(|x| x.as_str()).unwrap_or("");
+                let code = r.get("adcode").and_then(|x| x.as_str()).map(|s| s.to_string());
+                let lat = r
+                    .get("location")
+                    .and_then(|x| x.get("lat"))
+                    .and_then(|x| x.as_f64())
+                    .unwrap_or(0.0);
+                let lng = r
+                    .get("location")
+                    .and_then(|x| x.get("lng"))
+                    .and_then(|x| x.as_f64())
+                    .unwrap_or(0.0);
+                let tz = (lng / 15.0).round() as i32;
+                out.push(LocationResultDto {
+                    name: format!("{} {}", name, address).trim().to_string(),
+                    longitude: lng,
+                    latitude: lat,
+                    timezone: tz,
+                    code,
+                    source: "baidu".to_string(),
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// 高德逆地理编码
+async fn amap_regeo(api_key: &str, lng: f64, lat: f64) -> Result<Option<String>, String> {
+    let url = format!(
+        "https://restapi.amap.com/v3/geocode/regeo?key={}&location={},{}",
+        urlencoding(api_key), lng, lat,
+    );
+    let r = client().get(&url).send().await.map_err(|e| e.to_string())?;
+    let v: serde_json::Value = r.json().await.map_err(|e| e.to_string())?;
+    if v.get("status").and_then(|x| x.as_str()) == Some("1") {
+        Ok(v.get("regeocode")
+            .and_then(|x| x.get("formatted_address"))
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
+/// 百度逆地理编码
+async fn baidu_regeo(api_key: &str, lng: f64, lat: f64) -> Result<Option<String>, String> {
+    let url = format!(
+        "https://api.map.baidu.com/geocoder/v2/?ak={}&output=json&location={},{}",
+        urlencoding(api_key), lat, lng,
+    );
+    let r = client().get(&url).send().await.map_err(|e| e.to_string())?;
+    let v: serde_json::Value = r.json().await.map_err(|e| e.to_string())?;
+    if v.get("status").and_then(|x| x.as_i64()) == Some(0) {
+        Ok(v.get("result")
+            .and_then(|x| x.get("formatted_address"))
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+async fn location_lookup(
+    provider: String,
+    api_key: String,
+    q: String,
+) -> Result<Vec<LocationResultDto>, String> {
+    if q.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    if api_key.trim().is_empty() {
+        return Err("API Key 未配置，请在「设置 → 地点服务」填入。".to_string());
+    }
+    match provider.as_str() {
+        "amap" => amap_search(&api_key, &q).await,
+        "baidu" => baidu_search(&api_key, &q).await,
+        _ => Err(format!("未知 provider：{provider}")),
+    }
+}
+
+#[tauri::command]
+async fn location_regeo(
+    provider: String,
+    api_key: String,
+    longitude: f64,
+    latitude: f64,
+) -> Result<Option<String>, String> {
+    if api_key.trim().is_empty() {
+        return Ok(None);
+    }
+    match provider.as_str() {
+        "amap" => amap_regeo(&api_key, longitude, latitude).await,
+        "baidu" => baidu_regeo(&api_key, longitude, latitude).await,
+        _ => Ok(None),
+    }
+}
+
+#[tauri::command]
+async fn huangli_lookup(date: String) -> Result<serde_json::Value, String> {
+    let url = format!("https://www.huangli123.net/huangli/{}.html", date);
+    let r = client()
+        .get(&url)
+        .header("User-Agent", CHERRY_USER_AGENT)
+        .send()
+        .await
+        .map_err(|e| format!("黄历网请求失败：{e}"))?;
+    if !r.status().is_success() {
+        return Err(format!("黄历网返回 HTTP {}", r.status()));
+    }
+    let html = r.text().await.map_err(|e| format!("读取失败：{e}"))?;
+    let extract = |re: &str| -> Option<String> {
+        let re = regex::Regex::new(re).ok()?;
+        re.captures(&html)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().trim().to_string())
+    };
+    let lucky_hours: Vec<String> = regex::Regex::new(
+        r"吉时[：:]?\s*([子丑寅卯辰巳午未申酉戌亥]时\s*[\d]{2}:[\d]{2}-[\d]{2}:[\d]{2})",
+    )
+    .ok()
+    .map(|re| {
+        re.captures_iter(&html)
+            .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
+            .collect()
+    })
+    .unwrap_or_default();
+    Ok(serde_json::json!({
+        "chongsha": extract(r"冲[煞]?[：:]\s*([^\s<]+(?:煞[东南西北]+)?)"),
+        "taishen": extract(r"胎神[方在占位]+[：:]?\s*([^\s<]+)"),
+        "pengzu": extract(r"彭祖百忌[：:]\s*([^\n<]+)"),
+        "luckyHours": lucky_hours,
+        "source": "huangli123.net",
+    }))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             cherry_models,
             cherry_chat_stream,
             ai_models,
             ai_chat_stream,
             read_profiles,
-            write_profiles
+            write_profiles,
+            location_lookup,
+            location_regeo,
+            huangli_lookup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// 简易 URL 编码
+fn urlencoding(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
 }

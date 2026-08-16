@@ -284,6 +284,71 @@ const STYLE_PROMPTS: Record<AppSettings["aiTemplate"], string> = {
 保留文言之美又不失可读性，篇幅 500–900 字。`,
 };
 
+/**
+ * 来源标签：根据解读主题映射到主要数据维度。
+ * UI 用此在每个 H2 标题前显示徽章，并影响置信度计算。
+ */
+const TOPIC_SOURCES: Record<string, string[]> = {
+  八字命盘: ["四柱", "十神", "藏干", "纳音", "神煞", "大运"],
+  紫微命盘: ["主星", "四化", "宫位", "神煞"],
+  西洋星盘: ["行星", "相位", "宫位", "上升"],
+  七政四余: ["七政", "四余", "恒星"],
+  住宅风水: ["峦头", "理气", "八宅"],
+  六爻: ["卦象", "世应", "动爻", "用神"],
+  梅花易数: ["体卦", "用卦", "变卦", "互卦"],
+  奇门遁甲: ["三奇", "八门", "九星", "天盘"],
+  大六壬: ["天乙", "月将", "神煞"],
+  太乙神数: ["四计", "十六神"],
+  皇极经世: ["元会运世"],
+  五运六气: ["主运", "客运", "客气"],
+  塔罗牌: ["牌面", "正逆位"],
+  解梦: ["梦境意象", "心理学"],
+  周公解梦: ["意象", "传统释义"],
+};
+
+/**
+ * AI 解读的来源与置信度元数据。
+ * 渲染时显示在解读面板顶部。
+ */
+export interface InterpretMeta {
+  topic: string;
+  sources: string[];
+  /** 基于数据完整度的粗略置信度（高 / 中 / 低） */
+  confidence: "high" | "medium" | "low";
+  /** 置信度数值（0-1），用于可视化 */
+  confidenceValue: number;
+  /** 是否基于结构化数据（结构化则置信度高） */
+  hasStructuredData: boolean;
+}
+
+/** 计算置信度：根据数据完整度 + 主题匹配度 */
+export function calcConfidence(topic: string, data: unknown): InterpretMeta {
+  const sources = TOPIC_SOURCES[topic] ?? [topic];
+  let hasStructuredData = false;
+  let size = 0;
+  try {
+    const json = JSON.stringify(data);
+    size = json?.length ?? 0;
+    hasStructuredData = Array.isArray(data) || (typeof data === "object" && data !== null && Object.keys(data).length > 2);
+  } catch { /* ignore */ }
+
+  // 体积越大说明数据越丰富 → 置信度越高
+  let confidenceValue: number;
+  if (size > 6000) confidenceValue = 0.92;
+  else if (size > 3000) confidenceValue = 0.78;
+  else if (size > 1000) confidenceValue = 0.62;
+  else if (size > 200) confidenceValue = 0.45;
+  else confidenceValue = 0.25;
+
+  // 数据非结构化则再降一档
+  if (!hasStructuredData) confidenceValue *= 0.7;
+
+  const confidence: InterpretMeta["confidence"] =
+    confidenceValue >= 0.75 ? "high" : confidenceValue >= 0.5 ? "medium" : "low";
+
+  return { topic, sources, confidence, confidenceValue, hasStructuredData };
+}
+
 const SYSTEM_PROMPT_BASE = `你是一位精通中华传统术数（八字、紫微斗数、奇门遁甲、大六壬、六爻、梅花易数、太乙神数、皇极经世、五运六气、风水堪舆）与西方占星、塔罗的资深命理解读师。
 要求：
 1. 严格基于用户提供的结构化排盘数据进行解读，引用其中具体信息（干支、十神、星曜、卦象、牌面等）作为依据，不得编造数据之外的事实。

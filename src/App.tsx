@@ -22,10 +22,12 @@ import Tarot from "@/pages/zhanbu/Tarot";
 import Lingqian from "@/pages/zhanbu/Lingqian";
 import Dream from "@/pages/Dream";
 import Settings from "@/pages/Settings";
+import Updater from "@/components/updater/Updater";
 
 export default function App() {
   return (
     <HashRouter>
+      <Updater />
       <Routes>
         <Route element={<ConsoleShell />}>
           <Route path="/" element={<Home />} />

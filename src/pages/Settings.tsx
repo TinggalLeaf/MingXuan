@@ -13,11 +13,15 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Sparkles, User, Palette, Type, Brain, Moon, Trash2,
-  RefreshCw, Check, Loader2, Download, Upload, Settings as Cog,
+  RefreshCw, Check, Loader2, Download, Upload, Settings as Cog, MapPin,
 } from "lucide-react";
 import {
   AppSettings, DEFAULT_SETTINGS, loadSettings, saveSettings, FONT_PRESETS, COMMON_FONT_NAMES,
 } from "@/lib/settings";
+import {
+  loadLocationConfig, saveLocationConfig, searchLocation,
+  type LocationConfig, type LocationResult,
+} from "@/lib/location";
 import {
   loadProfiles, saveProfile, deleteProfile,
   profileSummary, type SavedProfile,
@@ -34,6 +38,7 @@ const SECTIONS = [
   { id: "dream", label: "解梦功能", icon: Moon },
   { id: "theme", label: "主题与外观", icon: Palette },
   { id: "font", label: "字体设置", icon: Type },
+  { id: "location", label: "地点服务", icon: MapPin },
   { id: "general", label: "通用", icon: Cog },
 ] as const;
 
@@ -91,6 +96,7 @@ export default function Settings() {
           {active === "dream" && <DreamSection />}
           {active === "theme" && <ThemeSection settings={settings} update={update} />}
           {active === "font" && <FontSection settings={settings} update={update} />}
+          {active === "location" && <LocationSection />}
           {active === "general" && <GeneralSection settings={settings} update={update} />}
         </div>
       </div>
@@ -737,6 +743,117 @@ function GeneralSection({
       <p className="mt-4 rounded-lg border border-gold-500/15 bg-ink-900/40 p-3 text-[11px] leading-relaxed text-paper-500">
         明玄 1.0 · 设置中心版本 1 · 全部数据仅存储于本地设备。
       </p>
+    </SectionCard>
+  );
+}
+
+function LocationSection() {
+  const [cfg, setCfg] = useState<LocationConfig>(loadLocationConfig());
+  const [draft, setDraft] = useState<LocationConfig>(cfg);
+  const [testQ, setTestQ] = useState("北京");
+  const [testing, setTesting] = useState(false);
+  const [results, setResults] = useState<LocationResult[]>([]);
+  const [error, setError] = useState("");
+
+  function update(patch: Partial<LocationConfig>) {
+    setDraft((d) => ({ ...d, ...patch }));
+  }
+
+  function save() {
+    saveLocationConfig(draft);
+    setCfg(draft);
+    alert("已保存。");
+  }
+
+  async function runTest() {
+    setTesting(true);
+    setError("");
+    try {
+      const r = await searchLocation(testQ);
+      setResults(r);
+      if (!r.length) setError("无结果。可检查 Key 是否正确 / 网络是否可达。");
+    } catch (e) {
+      setError(`调用失败：${(e as Error).message}`);
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  return (
+    <SectionCard
+      title="地点服务（经纬度自动查询）"
+      desc="配置地图服务后，出生档案输入地点即可自动填经度（替代手动填写）。API Key 仅存本地；请求经 Rust 后端转发，不在浏览器暴露。"
+    >
+      <div className="grid grid-cols-3 gap-2">
+        {([
+          { id: "local", label: "本地库（无需 Key）" },
+          { id: "amap", label: "高德地图" },
+          { id: "baidu", label: "百度地图" },
+        ] as const).map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => update({ provider: p.id })}
+            className={`tab-chip text-center text-sm ${draft.provider === p.id ? "is-active" : ""}`}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      {draft.provider !== "local" && (
+        <div className="mt-3 space-y-3">
+          <label className="block">
+            <span className="console-label mb-1 block">API Key</span>
+            <input
+              className="input-xuan w-full font-mono text-sm"
+              value={draft.apiKey}
+              onChange={(e) => update({ apiKey: e.target.value })}
+              placeholder={draft.provider === "amap" ? "高德 Web 端 JS API Key" : "百度 LBS 云 AK"}
+            />
+          </label>
+          <p className="rounded-lg border border-gold-500/15 bg-ink-900/40 p-3 text-[11px] leading-relaxed text-paper-500">
+            {draft.provider === "amap" ? (
+              <>高德申请：<b>lbs.amap.com/dev/key/app</b>，创建「Web 端 / JS API」类型 Key。</>
+            ) : (
+              <>百度申请：<b>lbsyun.baidu.com/apiconsole/key</b>，勾选「Place 检索」与「逆地理编码」。</>
+            )}
+            <br />
+            Key 仅存储于本地设备，请求通过 Rust 后端转发（<code className="rounded bg-ink-800 px-1">location_lookup</code> 命令），前端代码不暴露。
+          </p>
+        </div>
+      )}
+
+      <div className="mt-4 flex gap-2">
+        <button type="button" className="btn-gold !px-3 text-sm" onClick={save}>保存</button>
+        <input
+          className="input-xuan flex-1"
+          placeholder="测试关键词，如 北京 / 上海浦东"
+          value={testQ}
+          onChange={(e) => setTestQ(e.target.value)}
+        />
+        <button type="button" className="btn-ghost !px-3 text-sm" onClick={runTest} disabled={testing}>
+          {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : "测试搜索"}
+        </button>
+      </div>
+
+      {error && <p className="mt-3 text-xs text-cinnabar-400">{error}</p>}
+
+      {results.length > 0 && (
+        <div className="mt-3 rounded-lg border border-gold-500/15 bg-ink-900/40 p-3">
+          <div className="console-label mb-2">命中 {results.length} 条</div>
+          <ul className="space-y-1.5">
+            {results.slice(0, 6).map((r, i) => (
+              <li key={i} className="flex items-center justify-between rounded border border-ink-600 bg-ink-800/60 px-3 py-1.5 text-xs">
+                <span className="text-paper-100">{r.name}</span>
+                <span className="font-mono text-paper-400">
+                  {r.longitude.toFixed(4)}, {r.latitude.toFixed(4)} · {r.source}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </SectionCard>
   );
 }
