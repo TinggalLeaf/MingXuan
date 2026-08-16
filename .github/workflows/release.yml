@@ -110,15 +110,17 @@ jobs:
           fi
           tar -C "src-tauri/target/${{ matrix.target }}/release" -czf "MingXuan_${TAG}_${{ matrix.label }}_portable.tar.gz" ming-xuan
 
-      # macOS portable：dmg 打包后裸 .app 会被清理，直接复用产出的 .app.tar.gz
-      - name: Package portable (macOS .app)
+      # macOS：dmg 即安装包；如存在 .app.tar.gz（app bundle 产物）一并作为便携版上传
+      - name: Package portable (macOS)
         if: runner.os == 'macOS'
         run: |
-          TGZ=$(find "src-tauri/target/${{ matrix.target }}/release/bundle/macos" -maxdepth 1 -name "*.app.tar.gz" | head -1)
-          if [ -z "$TGZ" ]; then
-            echo "::error::no .app.tar.gz found"; exit 1
+          TGZ=$(find "src-tauri/target/${{ matrix.target }}/release/bundle" -name "*.app.tar.gz" | head -1)
+          if [ -n "$TGZ" ]; then
+            cp "$TGZ" "MingXuan_${TAG}_${{ matrix.label }}_portable.tar.gz"
+            echo "portable: $TGZ"
+          else
+            echo "no .app.tar.gz produced, skip portable (dmg suffices)"
           fi
-          cp "$TGZ" "MingXuan_${TAG}_${{ matrix.label }}_portable.tar.gz"
 
       # 只用 gh CLI 上传资产，绝不 PATCH Release：实测 GITHUB_TOKEN 对之前的运行
       # 创建的 Release 只要 PATCH 里带 tag_name/target_commitish 就 403
@@ -151,7 +153,7 @@ jobs:
             macos-*)
               files=(
                 "$bundle_dir/dmg/"*.dmg
-                "MingXuan_${TAG}_${{ matrix.label }}_portable.tar.gz"
+                MingXuan_${TAG}_${{ matrix.label }}_portable.tar.gz
               )
               ;;
           esac
