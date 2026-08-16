@@ -110,17 +110,10 @@ jobs:
           fi
           tar -C "src-tauri/target/${{ matrix.target }}/release" -czf "MingXuan_${TAG}_${{ matrix.label }}_portable.tar.gz" ming-xuan
 
-      # macOS：dmg 即安装包；如存在 .app.tar.gz（app bundle 产物）一并作为便携版上传
-      - name: Package portable (macOS)
+      # macOS：dmg 即安装包与分发产物（本工程不产生 .app.tar.gz，无需便携包步骤）
+      - name: Verify macOS dmg
         if: runner.os == 'macOS'
-        run: |
-          TGZ=$(find "src-tauri/target/${{ matrix.target }}/release/bundle" -name "*.app.tar.gz" | head -1)
-          if [ -n "$TGZ" ]; then
-            cp "$TGZ" "MingXuan_${TAG}_${{ matrix.label }}_portable.tar.gz"
-            echo "portable: $TGZ"
-          else
-            echo "no .app.tar.gz produced, skip portable (dmg suffices)"
-          fi
+        run: ls -la "src-tauri/target/${{ matrix.target }}/release/bundle/dmg/"
 
       # 只用 gh CLI 上传资产，绝不 PATCH Release：实测 GITHUB_TOKEN 对之前的运行
       # 创建的 Release 只要 PATCH 里带 tag_name/target_commitish 就 403
@@ -153,7 +146,6 @@ jobs:
             macos-*)
               files=(
                 "$bundle_dir/dmg/"*.dmg
-                MingXuan_${TAG}_${{ matrix.label }}_portable.tar.gz
               )
               ;;
           esac
