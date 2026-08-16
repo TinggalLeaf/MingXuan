@@ -29,3 +29,5 @@ src-tauri/gen/
 
 # Env
 .env
+vite.config.js
+vite.config.d.ts
