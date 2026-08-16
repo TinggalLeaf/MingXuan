@@ -518,6 +518,62 @@ fn pick_table_row(text: &str, label: &str) -> Vec<String> {
     Vec::new()
 }
 
+/// 从 HTML 表格中按行标签精确取一行
+fn parse_hour_table(html: &str) -> std::collections::HashMap<String, Vec<String>> {
+    let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    // 找到所有 <table ...>...</table>
+    let table_re = regex::Regex::new(r"(?s)<table[^>]*>(.*?)</table>").unwrap();
+    // 优先取第二个表（包含 12 时辰完整信息）
+    let tables: Vec<&str> = table_re.captures_iter(html).filter_map(|c| c.get(1).map(|m| m.as_str())).collect();
+    // 找包含"时辰"行的表
+    let target = tables.iter().find(|t| t.contains("时辰") && t.contains("子时") && t.contains("亥时")).copied();
+    if let Some(t) = target {
+        let row_re = regex::Regex::new(r"(?s)<tr[^>]*>(.*?)</tr>").unwrap();
+        let cell_re = regex::Regex::new(r"(?s)<(?:td|th)[^>]*>(.*?)</(?:td|th)>").unwrap();
+        // 标签清理：去掉 HTML 标签
+        let strip = |s: &str| -> String {
+            regex::Regex::new(r"<[^>]+>").unwrap().replace_all(s, "").into_owned()
+                .replace("&nbsp;", " ")
+                .replace("&amp;", "&")
+                .trim()
+                .to_string()
+        };
+        for row_cap in row_re.captures_iter(t) {
+            let row_html = row_cap.get(1).map(|m| m.as_str()).unwrap_or("");
+            let cells: Vec<String> = cell_re
+                .captures_iter(row_html)
+                .filter_map(|c| c.get(1).map(|m| strip(m.as_str())))
+                .collect();
+            if cells.is_empty() {
+                continue;
+            }
+            let label = cells[0].clone();
+            // 数据行第一列是标签，后面 12 个是数据；标签行第一列是"时辰"，后面 12 个是子丑寅...
+            if label == "时辰" {
+                continue; // 跳过表头
+            }
+            // 只保留 13 列的行（1 标签 + 12 数据）
+            if cells.len() >= 13 {
+                map.insert(label, cells[1..13].to_vec());
+            }
+        }
+    }
+    map
+}
+
+/// 从 HTML 中精确抽取"标签 + 数字干支"等极短字段
+fn pick_short_after(text: &str, label: &str, len: usize) -> String {
+    let pat = format!(r"(?m)^{}\s*([一-龥A-Za-z0-9]{{{},{}}})", regex::escape(label), len, len);
+    if let Ok(re) = regex::Regex::new(&pat) {
+        if let Some(c) = re.captures(text) {
+            if let Some(m) = c.get(1) {
+                return m.as_str().to_string();
+            }
+        }
+    }
+    String::new()
+}
+
 #[tauri::command]
 async fn huangli_lookup(date: String) -> Result<serde_json::Value, String> {
     let url = format!("https://www.huangli123.net/huangli/{}.html", date);
@@ -533,23 +589,48 @@ async fn huangli_lookup(date: String) -> Result<serde_json::Value, String> {
     let html = r.text().await.map_err(|e| format!("读取失败：{e}"))?;
     let text = html_to_text(&html);
 
-    let ganzhi_year = pick_after(&text, &["丙午年", "年柱"]);
-    let ganzhi_month = pick_after(&text, &["月柱"]);
-    let ganzhi_day = pick_after(&text, &["日柱"]);
-    let _ = ganzhi_year.clone();
-    let _ = ganzhi_month.clone();
-    let _ = ganzhi_day.clone();
-    let zodiac = pick_after(&text, &["生肖"]);
-    let constellation = pick_after(&text, &["星座"]);
-    let wuxing_year = pick_after(&text, &["年五行"]);
-    let wuxing_month = pick_after(&text, &["月五行"]);
-    let wuxing_day = pick_after(&text, &["日五行"]);
-    let wuxing_numeric = pick_after(&text, &["甲子五行"]);
+    // 基础信息：从「丙午年 属马 天河水」这一行拆
+    let ganzhi_year = regex::Regex::new(r"(\w{2})年\s*属\w").ok().and_then(|re| re.captures(&text)).and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string()).unwrap_or_default();
+    let ganzhi_month = regex::Regex::new(r"(\w{2})月\s*属\w").ok().and_then(|re| re.captures(&text)).and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string()).unwrap_or_default();
+    let ganzhi_day = regex::Regex::new(r"(\w{2})日\s*属\w").ok().and_then(|re| re.captures(&text)).and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string()).unwrap_or_default();
+    // 生肖：单字，立即跟在"生肖"后
+    let zodiac = pick_short_after(&text, "生肖", 1);
+    let constellation = pick_short_after(&text, "星座", 3);
+    // 纳音：在第一行的"丙午年 属马 天河水"里
+    let wuxing_year = regex::Regex::new(r"(\w{2})年\s*属\w\s*(\w{4})").ok()
+        .and_then(|re| re.captures(&text))
+        .and_then(|c| c.get(2))
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_default();
+    let wuxing_month = regex::Regex::new(r"(\w{2})月\s*属\w\s*(\w{4})").ok()
+        .and_then(|re| re.captures(&text))
+        .and_then(|c| c.get(2))
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_default();
+    let wuxing_day = regex::Regex::new(r"(\w{2})日\s*属\w\s*(\w{4})").ok()
+        .and_then(|re| re.captures(&text))
+        .and_then(|c| c.get(2))
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_default();
+    let wuxing_numeric = regex::Regex::new(r"甲子五行\s*(\w)").ok()
+        .and_then(|re| re.captures(&text))
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_default();
 
-    let solar = pick_after(&text, &["公历(阳历)", "公历（阳历）"]);
+    // 公历 / 农历 / 干支（来自文本块）
+    let solar_full = pick_after(&text, &["公历(阳历)", "公历（阳历）"]);
     let lunar_full = pick_after(&text, &["农历(阴历)", "农历（阴历）"]);
-    let pillars = pick_after(&text, &["干支"]);
+    let pillars = regex::Regex::new(r"(\w{2}年\s*\w{2}月\s*\w{2}日)").ok()
+        .and_then(|re| re.captures(&text))
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().trim().to_string())
+        .unwrap_or_default();
 
+    // 节气
     let terms: Vec<String> = regex::Regex::new(r"节气[：:]\s*([一-龥]+)\s*(\d+月\d+日)(?:\s*星期[一-龥天]+)?\s*(\d{2}:\d{2})?")
         .ok()
         .map(|re| {
@@ -566,8 +647,8 @@ async fn huangli_lookup(date: String) -> Result<serde_json::Value, String> {
         })
         .unwrap_or_default();
 
-    let lunar_year_days_total = regex::Regex::new(r"农历总共有\s*(\d+)\s*天")
-        .ok().and_then(|re| re.captures(&text)).and_then(|c| c.get(1))
+    // 农历总天数
+    let lunar_year_days_total = regex::Regex::new(r"农历总共有\s*(\d+)\s*天").ok().and_then(|re| re.captures(&text)).and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string()).unwrap_or_default();
     let lunar_year_range = pick_after(&text, &["起止日期"]);
     let lunar_year_passed = regex::Regex::new(r"已过(\d+)天").ok().and_then(|re| re.captures(&text)).and_then(|c| c.get(1))
@@ -575,15 +656,18 @@ async fn huangli_lookup(date: String) -> Result<serde_json::Value, String> {
     let lunar_year_remaining = regex::Regex::new(r"还剩(\d+)天").ok().and_then(|re| re.captures(&text)).and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string()).unwrap_or_default();
 
+    // 月令 / 物候 / 月相 / 六耀 / 日禄
     let month_order = pick_after(&text, &["月令"]);
     let phenology = pick_after(&text, &["物候"]);
     let phase = pick_after(&text, &["月相"]);
     let liu_yao = pick_after(&text, &["六耀"]);
     let ri_lu = pick_after(&text, &["日禄"]);
 
+    // 值神 / 十二神
     let duty_god = pick_after(&text, &["值神"]);
     let twelve_star = pick_after(&text, &["十二神"]);
 
+    // 宜 / 忌（块）
     let yi_block = regex::Regex::new(r"老黄历所宜\s*\n([\s\S]*?)\n\s*\n老黄历所忌")
         .ok().and_then(|re| re.captures(&text))
         .map(|c| c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default()).unwrap_or_default();
@@ -599,22 +683,24 @@ async fn huangli_lookup(date: String) -> Result<serde_json::Value, String> {
     let yi: Vec<String> = extract_words(&yi_block);
     let ji: Vec<String> = extract_words(&ji_block);
 
+    // 神位
     let cai_shen = pick_after(&text, &["财神"]);
     let xi_shen = pick_after(&text, &["喜神"]);
     let fu_shen = pick_after(&text, &["福神"]);
-    let gui_yang = pick_after(&text, &["阳贵神", "阳贵神："]);
-    let gui_yin = pick_after(&text, &["阴贵神", "阴贵神："]);
+    let gui_yang = pick_after(&text, &["阳贵神"]);
+    let gui_yin = pick_after(&text, &["阴贵神"]);
 
+    // 胎神
     let taishen_month = pick_after(&text, &["本月：", "本月:"]);
     let taishen_day = pick_after(&text, &["今日：", "今日:"]);
     let taishen_direction = regex::Regex::new(r"占(\S{1,4})(?:，|$)")
         .ok().and_then(|re| re.captures(&text)).and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string()).unwrap_or_default();
 
-    let chong = regex::Regex::new(r"相冲\s*\n([^\n]+)")
-        .ok().and_then(|re| re.captures(&text)).and_then(|c| c.get(1))
-        .map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+    // 相冲
+    let chong = pick_after(&text, &["相冲"]);
 
+    // 吉神宜趋 / 凶煞宜忌
     let lucky_gods_block = regex::Regex::new(r"吉神宜趋\s*\n([\s\S]*?)\n\s*\n凶煞宜忌")
         .ok().and_then(|re| re.captures(&text))
         .map(|c| c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default()).unwrap_or_default();
@@ -624,23 +710,26 @@ async fn huangli_lookup(date: String) -> Result<serde_json::Value, String> {
         .map(|c| c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default()).unwrap_or_default();
     let evil_gods: Vec<String> = extract_words(&evil_gods_block);
 
+    // 彭祖百忌：只保留「XX不YY」格式（4-12 字，必须包含"不"且前后是干支/生肖）
     let pengzu_lines: Vec<String> = text
         .lines()
         .map(|s| s.trim().to_string())
         .filter(|s| {
-            s.chars().count() >= 4
-                && s.chars().count() <= 30
-                && (s.starts_with("癸") || s.starts_with("亥") || s.starts_with("甲")
-                    || s.starts_with("乙") || s.starts_with("丙") || s.starts_with("丁")
-                    || s.starts_with("戊") || s.starts_with("己") || s.starts_with("庚")
-                    || s.starts_with("辛") || s.starts_with("壬") || s.starts_with("子")
-                    || s.starts_with("丑") || s.starts_with("寅") || s.starts_with("卯")
-                    || s.starts_with("辰") || s.starts_with("巳") || s.starts_with("午")
-                    || s.starts_with("未") || s.starts_with("申") || s.starts_with("酉")
-                    || s.starts_with("戌"))
+            let n = s.chars().count();
+            if n < 4 || n > 12 { return false; }
+            // 必须包含"不"
+            if !s.contains('不') { return false; }
+            // 必须是单行（不含换行）
+            !s.contains('　') && !s.contains("；") // 排除多个宜忌堆叠的行
+        })
+        .filter(|s| {
+            // 必须以干支或时辰前缀开头
+            let first = s.chars().next().unwrap_or(' ');
+            "甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥".contains(first)
         })
         .collect();
 
+    // 大殓吉时
     let da_lian_block = regex::Regex::new(r"大殓吉时\s*\n([\s\S]*?)\n\s*\n空亡所值")
         .ok().and_then(|re| re.captures(&text))
         .map(|c| c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default()).unwrap_or_default();
@@ -650,20 +739,20 @@ async fn huangli_lookup(date: String) -> Result<serde_json::Value, String> {
         .filter(|t| t.ends_with("时") && t.chars().count() <= 3)
         .collect();
 
-    // 空亡：表中"年寅卯 月辰巳 日子丑" — 用 pick_after 抓"年"
-    let kong_year = pick_after(&text, &["年 "]);
-    let kong_month = pick_after(&text, &["月 "]);
-    let kong_day = pick_after(&text, &["日 "]);
+    // 空亡：表格内 "年 \t X \t 月 \t Y \t 日 \t Z"
+    let kong_wang_table = pick_table_row(&text, "日");
+    let kong_year = kong_wang_table.get(0).cloned().unwrap_or_default();
+    let kong_month = kong_wang_table.get(1).cloned().unwrap_or_default();
+    let kong_day = kong_wang_table.get(2).cloned().unwrap_or_default();
 
+    // 九宫飞星
     let nine_star_desc = pick_after(&text, &["九宫飞星"]);
 
-    let star_sign_block = regex::Regex::new(r"今日星宿[：:]\s*\n([\s\S]*?)\n\s*\n的呼勿近")
-        .ok().and_then(|re| re.captures(&text))
-        .map(|c| c.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default()).unwrap_or_default();
-    let ri_hu = regex::Regex::new(r"的呼勿近[：:]\s*\n([^\n]+)")
-        .ok().and_then(|re| re.captures(&text)).and_then(|c| c.get(1))
-        .map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+    // 星宿 / 的呼
+    let star_sign = pick_after(&text, &["今日星宿"]);
+    let ri_hu = pick_after(&text, &["的呼勿近"]);
 
+    // 冲合
     let chong_he_block = regex::Regex::new(r"今日冲合\s*\n([\s\S]*?)\n\s*\n三煞方")
         .ok().and_then(|re| re.captures(&text))
         .map(|c| c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default()).unwrap_or_default();
@@ -673,62 +762,63 @@ async fn huangli_lookup(date: String) -> Result<serde_json::Value, String> {
         .map(|t| t.to_string())
         .collect();
 
+    // 三煞
     let san_sha_year = pick_after(&text, &["本年三煞"]);
     let san_sha_month = pick_after(&text, &["本月三煞"]);
     let san_sha_day = pick_after(&text, &["今日三煞"]);
 
-    let qi_sha_year = pick_after(&text, &["年七煞"]);
-    let qi_sha_month = pick_after(&text, &["月七煞"]);
-    let qi_sha_day = pick_after(&text, &["日七煞"]);
+    // 七煞（"年七煞："格式）
+    let qi_sha_year = regex::Regex::new(r"年七煞[：:]\s*(\S{1,6})").ok().and_then(|re| re.captures(&text)).and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string()).unwrap_or_default();
+    let qi_sha_month = regex::Regex::new(r"月七煞[：:]\s*(\S{1,6})").ok().and_then(|re| re.captures(&text)).and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string()).unwrap_or_default();
+    let qi_sha_day = regex::Regex::new(r"日七煞[：:]\s*(\S{1,6})").ok().and_then(|re| re.captures(&text)).and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string()).unwrap_or_default();
 
-    let sui_sha = pick_after(&text, &["本年岁煞"]);
-    let yue_sha = pick_after(&text, &["月煞"]);
+    // 岁煞 / 月煞
+    let sui_sha = regex::Regex::new(r"本年岁煞[：:]\s*(\S)").ok().and_then(|re| re.captures(&text)).and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string()).unwrap_or_default();
+    let yue_sha = regex::Regex::new(r"月煞[：:]\s*(\S)").ok().and_then(|re| re.captures(&text)).and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string()).unwrap_or_default();
 
-    let luoshu_poem = regex::Regex::new(r"今日河图洛书九星吉凶\s*\n([\s\S]*?)\n\s*\n今日卦象")
-        .ok().and_then(|re| re.captures(&text))
-        .map(|c| c.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default()).unwrap_or_default();
-    let gua_block = regex::Regex::new(r"今日卦象[：:]\s*\n([\s\S]*?)\n\s*\n【象曰】")
-        .ok().and_then(|re| re.captures(&text))
-        .map(|c| c.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default()).unwrap_or_default();
-    let gua_xiang = regex::Regex::new(r"【象曰】[：:]?\s*([\s\S]*?)\n\s*\n【事业】")
-        .ok().and_then(|re| re.captures(&text))
-        .map(|c| c.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default()).unwrap_or_default();
+    // 河图洛书
+    let luoshu_poem = pick_after(&text, &["今日河图洛书九星吉凶"]);
 
-    let twelve_star_poem = regex::Regex::new(r"今日十二神吉凶所主\s*\n([\s\S]*?)\n\s*\n今日二十八星宿吉凶")
-        .ok().and_then(|re| re.captures(&text))
-        .map(|c| c.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default()).unwrap_or_default();
-    let star_sign_poem = regex::Regex::new(r"今日二十八星宿吉凶\s*\n([\s\S]*?)\n\s*\n地母经卜曰")
-        .ok().and_then(|re| re.captures(&text))
-        .map(|c| c.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default()).unwrap_or_default();
+    // 卦象
+    let gua_name = pick_after(&text, &["今日卦象"]);
 
-    let dimu_block = regex::Regex::new(r"地母经卜曰\s*\n([\s\S]*?)\n\s*\n地母经诗曰")
-        .ok().and_then(|re| re.captures(&text))
-        .map(|c| c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default()).unwrap_or_default();
-    let dimu: Vec<String> = dimu_block.split('\n').map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s.chars().count() >= 4).collect();
-    let dimu_poem_block = regex::Regex::new(r"地母经诗曰\s*\n([\s\S]*?)\n\s*\n七月丰歉歌")
-        .ok().and_then(|re| re.captures(&text))
-        .map(|c| c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default()).unwrap_or_default();
-    let dimu_poem: Vec<String> = dimu_poem_block.split('\n').map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s.chars().count() >= 4).collect();
-    let harvest_block = regex::Regex::new(r"七月丰歉歌\s*\n([\s\S]*?)\n\s*\n时辰")
-        .ok().and_then(|re| re.captures(&text))
-        .map(|c| c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default()).unwrap_or_default();
-    let harvest: Vec<String> = harvest_block.split('\n').map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s.chars().count() >= 4).collect();
+    // 十二神所主 / 二十八宿歌诀
+    let twelve_star_poem = pick_after(&text, &["今日十二神吉凶所主"]);
+    let star_sign_poem = pick_after(&text, &["今日二十八星宿吉凶"]);
 
-    // 十二时辰（从 <table> 标签行解析；innerText 后每行是"标签 + 12 个 tab 分隔字段"）
+    // 地母经 / 丰歉歌
+    let dimu: Vec<String> = regex::Regex::new(r"地母经卜曰\s*\n([\s\S]*?)\n\s*\n地母经诗曰")
+        .ok().and_then(|re| re.captures(&text))
+        .map(|c| c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default())
+        .map(|s| s.lines().map(|x| x.trim().to_string()).filter(|x| !x.is_empty() && x.chars().count() >= 4).collect())
+        .unwrap_or_default();
+    let dimu_poem: Vec<String> = regex::Regex::new(r"地母经诗曰\s*\n([\s\S]*?)\n\s*\n七月丰歉歌")
+        .ok().and_then(|re| re.captures(&text))
+        .map(|c| c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default())
+        .map(|s| s.lines().map(|x| x.trim().to_string()).filter(|x| !x.is_empty() && x.chars().count() >= 4).collect())
+        .unwrap_or_default();
+    let harvest: Vec<String> = regex::Regex::new(r"七月丰歉歌\s*\n([\s\S]*?)\n\s*\n时辰")
+        .ok().and_then(|re| re.captures(&text))
+        .map(|c| c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default())
+        .map(|s| s.lines().map(|x| x.trim().to_string()).filter(|x| !x.is_empty() && x.chars().count() >= 4).collect())
+        .unwrap_or_default();
+
+    // ===== 十二时辰完整明细（直接从 HTML 表格解析） =====
+    let hour_rows = parse_hour_table(&html);
     let shichens = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"];
     let time_ranges = [
         "23:00-00:59", "01:00-02:59", "03:00-04:59", "05:00-06:59",
         "07:00-08:59", "09:00-10:59", "11:00-12:59", "13:00-14:59",
         "15:00-16:59", "17:00-18:59", "19:00-20:59", "21:00-22:59",
     ];
-    let labels = ["时辰", "时间", "八字", "星神", "正冲", "吉凶", "生肖", "吉神", "凶煞", "时宜", "时忌", "五行", "煞方", "财神", "喜神"];
-    let mut row_map: std::collections::HashMap<&str, Vec<String>> = std::collections::HashMap::new();
-    for label in labels.iter() {
-        let row = pick_table_row(&text, label);
-        if !row.is_empty() {
-            row_map.insert(label, row);
-        }
-    }
+    let get_row = |label: &str| -> Vec<String> {
+        hour_rows.get(label).cloned().unwrap_or_default()
+    };
     let split_words = |s: &str| -> Vec<String> {
         s.split(|c: char| c == ' ' || c == '\t' || c == '　')
             .map(|t| t.trim().to_string())
@@ -738,7 +828,7 @@ async fn huangli_lookup(date: String) -> Result<serde_json::Value, String> {
     let mut hours: Vec<serde_json::Value> = Vec::with_capacity(12);
     for (i, sc) in shichens.iter().enumerate() {
         let get = |k: &str| -> String {
-            row_map.get(k).and_then(|v| v.get(i)).cloned().unwrap_or_default()
+            get_row(k).get(i).cloned().unwrap_or_default()
         };
         let fortune = get("吉凶");
         let fortune_str: &str = if fortune.contains("吉") && !fortune.contains("凶") {
@@ -768,6 +858,7 @@ async fn huangli_lookup(date: String) -> Result<serde_json::Value, String> {
         }));
     }
 
+    // 构造结果
     let mut obj = serde_json::Map::new();
     obj.insert("date".into(), serde_json::Value::String(date.clone()));
     obj.insert("lunar".into(), serde_json::Value::String(lunar_full.clone()));
@@ -780,7 +871,7 @@ async fn huangli_lookup(date: String) -> Result<serde_json::Value, String> {
     if !wuxing_month.is_empty() { obj.insert("wuxingMonth".into(), serde_json::Value::String(wuxing_month.clone())); }
     if !wuxing_day.is_empty() { obj.insert("wuxingDay".into(), serde_json::Value::String(wuxing_day.clone())); }
     if !wuxing_numeric.is_empty() { obj.insert("wuxingNumeric".into(), serde_json::Value::String(wuxing_numeric.clone())); }
-    obj.insert("solarFull".into(), serde_json::Value::String(solar.clone()));
+    obj.insert("solarFull".into(), serde_json::Value::String(solar_full.clone()));
     obj.insert("lunarFull".into(), serde_json::Value::String(lunar_full.clone()));
     obj.insert("pillars".into(), serde_json::Value::String(pillars.clone()));
     let t0 = terms.first().cloned().unwrap_or_default();
@@ -817,14 +908,14 @@ async fn huangli_lookup(date: String) -> Result<serde_json::Value, String> {
     obj.insert("daLianLuckyHours".into(), serde_json::Value::Array(da_lian_lucky_hours.into_iter().map(serde_json::Value::String).collect()));
     obj.insert("kongWang".into(), serde_json::json!({"year": kong_year, "month": kong_month, "day": kong_day}));
     obj.insert("nineStar".into(), serde_json::json!({"name": nine_star_desc.clone(), "description": nine_star_desc, "poem": ""}));
-    obj.insert("starSign".into(), serde_json::Value::String(star_sign_block));
+    obj.insert("starSign".into(), serde_json::Value::String(star_sign));
     obj.insert("riHu".into(), serde_json::Value::String(ri_hu));
     obj.insert("chongHe".into(), serde_json::Value::Array(chong_he.into_iter().map(serde_json::Value::String).collect()));
     obj.insert("sanSha".into(), serde_json::json!({"year": san_sha_year, "month": san_sha_month, "day": san_sha_day}));
     obj.insert("qiSha".into(), serde_json::json!({"year": qi_sha_year, "month": qi_sha_month, "day": qi_sha_day}));
     obj.insert("suiSha".into(), serde_json::json!({"year": sui_sha, "month": yue_sha}));
     obj.insert("luoshu".into(), serde_json::json!({"name": "", "poem": luoshu_poem, "interpretation": ""}));
-    obj.insert("gua".into(), serde_json::json!({"name": gua_block, "description": gua_xiang}));
+    obj.insert("gua".into(), serde_json::json!({"name": gua_name, "description": ""}));
     obj.insert("hours".into(), serde_json::Value::Array(hours));
     obj.insert("twelveStarPoem".into(), serde_json::Value::String(twelve_star_poem));
     obj.insert("starSignPoem".into(), serde_json::Value::String(star_sign_poem));
