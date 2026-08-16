@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { MessageSquareText, X, Send, Square, Trash2, Sparkles } from "lucide-react";
 import { chatStream, resolveUsableSettings, type ChatMessage } from "@/lib/ai";
 import { useAiContext, type AiContext } from "./aiContext";
-import { renderMarkdownLite } from "./markdownLite";
+import { MarkdownLite } from "./markdownLite";
 
 const LS_CHAT_KEY = "mingxuan.ai.chat";
 /** 上下文 JSON 摘要上限 */
@@ -259,7 +259,7 @@ export default function AiChatDock({ open, onToggle }: AiChatDockProps) {
             >
               {m.content ? (
                 <>
-                  {renderMarkdownLite(m.content)}
+                  <MarkdownLite text={m.content} />
                   {streaming && i === messages.length - 1 && (
                     <span className="anim-flicker ml-0.5 inline-block h-4 w-2 bg-gold-400/80" />
                   )}

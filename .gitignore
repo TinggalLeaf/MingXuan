@@ -31,3 +31,6 @@ src-tauri/gen/
 .env
 vite.config.js
 vite.config.d.ts
+
+# Claude / Playwright MCP transient
+.playwright-mcp/

@@ -20,6 +20,8 @@ import Huangji from "@/pages/zhanbu/Huangji";
 import Wuyun from "@/pages/zhanbu/Wuyun";
 import Tarot from "@/pages/zhanbu/Tarot";
 import Lingqian from "@/pages/zhanbu/Lingqian";
+import Dream from "@/pages/Dream";
+import Settings from "@/pages/Settings";
 
 export default function App() {
   return (
@@ -46,6 +48,8 @@ export default function App() {
           <Route path="/zhanbu/wuyun" element={<Wuyun />} />
           <Route path="/zhanbu/tarot" element={<Tarot />} />
           <Route path="/zhanbu/lingqian" element={<Lingqian />} />
+          <Route path="/dream" element={<Dream />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Home />} />
         </Route>
       </Routes>
