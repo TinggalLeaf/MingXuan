@@ -110,13 +110,14 @@ jobs:
           fi
           tar -C "src-tauri/target/${{ matrix.target }}/release" -czf "MingXuan_${TAG}_${{ matrix.label }}_portable.tar.gz" ming-xuan
 
-      # macOS portable (.app bundle zipped；productName 为「明玄」)
+      # macOS portable (.app bundle zipped；bundle 名随 productName，动态查找更稳)
       - name: Package portable (macOS .app)
         if: runner.os == 'macOS'
         run: |
-          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/明玄.app"
-          if [ ! -d "$APP" ]; then
-            echo "::error::App bundle not found at $APP"; exit 1
+          APP_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/macos"
+          APP=$(find "$APP_DIR" -maxdepth 1 -name "*.app" | head -1)
+          if [ -z "$APP" ]; then
+            echo "::error::no .app bundle under $APP_DIR"; ls -la "$APP_DIR" || true; exit 1
           fi
           ditto -c -k --sequesterRsrc --keepParent "$APP" "MingXuan_${TAG}_${{ matrix.label }}_portable.zip"
 
