@@ -129,23 +129,31 @@ jobs:
         run: |
           shopt -s nullglob
           bundle_dir="src-tauri/target/${{ matrix.target }}/release/bundle"
+          # CI 环境对非 ASCII 文件名（明玄_*）上传会被剥成 _*，先统一改名为 ASCII
           case "${{ matrix.os }}" in
             windows-*)
+              i=0
+              for f in "$bundle_dir/nsis/"*.exe; do
+                i=$((i+1)); mv "$f" "MingXuan_${TAG}_${{ matrix.label }}_setup.exe"
+              done
               files=(
-                "$bundle_dir/nsis/"*.exe
+                MingXuan_${TAG}_${{ matrix.label }}_setup.exe
                 "MingXuan_${TAG}_${{ matrix.label }}_portable.zip"
               )
               ;;
             ubuntu-*|linux-*)
+              for f in "$bundle_dir/deb/"*.deb; do mv "$f" "MingXuan_${TAG}_${{ matrix.label }}.deb"; done
+              for f in "$bundle_dir/appimage/"*.AppImage; do mv "$f" "MingXuan_${TAG}_${{ matrix.label }}.AppImage"; done
               files=(
-                "$bundle_dir/deb/"*.deb
-                "$bundle_dir/appimage/"*.AppImage
+                MingXuan_${TAG}_${{ matrix.label }}.deb
+                MingXuan_${TAG}_${{ matrix.label }}.AppImage
                 "MingXuan_${TAG}_${{ matrix.label }}_portable.tar.gz"
               )
               ;;
             macos-*)
+              for f in "$bundle_dir/dmg/"*.dmg; do mv "$f" "MingXuan_${TAG}_${{ matrix.label }}.dmg"; done
               files=(
-                "$bundle_dir/dmg/"*.dmg
+                MingXuan_${TAG}_${{ matrix.label }}.dmg
               )
               ;;
           esac
