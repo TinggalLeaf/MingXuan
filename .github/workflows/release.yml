@@ -47,7 +47,7 @@ jobs:
           - { os: windows-latest, target: x86_64-pc-windows-msvc, label: windows-x64, bundles: nsis }
           - { os: windows-11-arm, target: aarch64-pc-windows-msvc, label: windows-arm64, bundles: nsis }
           - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, label: linux-x64, bundles: deb,appimage }
-          - { os: macos-latest, target: aarch64-apple-darwin, label: macos-arm64, bundles: dmg }
+          - { os: macos-latest, target: aarch64-apple-darwin, label: macos-arm64, bundles: dmg,app }
     runs-on: ${{ matrix.os }}
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
