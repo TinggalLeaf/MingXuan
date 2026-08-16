@@ -245,14 +245,6 @@ fn write_profiles(app: tauri::AppHandle, json: String) -> Result<(), String> {
 // 由 Rust 后端直接发请求，绕过浏览器 CORS；同时保护 API Key。
 // 前端经 invoke 调用，无需在浏览器暴露密钥。
 
-use serde::Deserialize;
-
-#[derive(Deserialize)]
-struct LocationSearchArgs {
-    provider: String,
-    api_key: String,
-    q: String,
-}
 
 #[derive(serde::Serialize, Clone)]
 struct LocationResultDto {
