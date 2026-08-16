@@ -6,7 +6,7 @@ import {
   resolveUsableSettings,
 } from "@/lib/ai";
 import { registerAiContext } from "./aiContext";
-import { renderMarkdownLite } from "./markdownLite";
+import { MarkdownLite } from "./markdownLite";
 
 export interface AiInterpretProps {
   /** 解读主题，如「八字命盘」「奇门遁甲局」 */
@@ -128,7 +128,7 @@ export default function AiInterpret({ topic, data, question, className = "" }: A
         >
           {content ? (
             <>
-              {renderMarkdownLite(content)}
+              <MarkdownLite text={content} />
               {streaming && <span className="anim-flicker ml-0.5 inline-block h-4 w-2 bg-gold-400/80" />}
             </>
           ) : (

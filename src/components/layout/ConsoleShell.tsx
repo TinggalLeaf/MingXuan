@@ -1,8 +1,7 @@
 import { useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
-import { Menu, X, MessageSquareText } from "lucide-react";
+import { Menu, X, MessageSquareText, Settings as Cog } from "lucide-react";
 import { siteConfig } from "@/lib/config";
-import AiSettingsButton from "@/components/ai/AiSettingsButton";
 import AiChatDock from "@/components/ai/AiChatDock";
 import GanzhiClock from "@/components/layout/GanzhiClock";
 
@@ -47,6 +46,16 @@ const NAV_SECTIONS = [
     code: "SYS.05",
     label: "运势",
     items: [{ to: "/kline", label: "人生K线" }],
+  },
+  {
+    code: "SYS.06",
+    label: "解梦",
+    items: [{ to: "/dream", label: "周公解梦" }],
+  },
+  {
+    code: "SYS.07",
+    label: "系统",
+    items: [{ to: "/settings", label: "设置中心" }],
   },
 ];
 
@@ -141,7 +150,14 @@ export default function ConsoleShell() {
           >
             <MessageSquareText className="h-4 w-4" />
           </button>
-          <AiSettingsButton />
+          <Link
+            to="/settings"
+            title="设置中心"
+            aria-label="设置中心"
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-gold-500/30 text-gold-400 transition-all hover:border-gold-500 hover:bg-gold-500/10 hover:text-gold-300"
+          >
+            <Cog className="h-4 w-4" />
+          </Link>
         </div>
       </header>
 

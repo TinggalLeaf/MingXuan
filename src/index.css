@@ -65,21 +65,200 @@
 
 :root {
   color-scheme: dark;
+  --font-app: "Noto Serif SC", "Source Han Serif SC", "STSong", "SimSun", "Songti SC", serif;
+  --font-app-weight: 400;
+  --font-scale: 1;
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
 }
 
 html {
   scroll-behavior: smooth;
+  /* 修复低分屏字体模糊：开启灰阶平滑 + 字体粗细归一 */
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
+
+html[data-font-family="song"] body { font-family: var(--font-app); }
+html[data-font-family="kai"] body { font-family: var(--font-app); }
+html[data-font-family="hei"] body { font-family: var(--font-app); }
+html[data-font-family="yuan"] body { font-family: var(--font-app); }
+html[data-font-family="system"] body { font-family: var(--font-app); }
+
+html[data-font-weight="bold"] body { font-weight: 700; }
+html[data-font-weight="medium"] body { font-weight: 550; }
+html[data-font-weight="normal"] body { font-weight: 400; }
 
 body {
   background: var(--color-ink-950);
   color: var(--color-paper-100);
-  font-family: var(--font-song);
+  font-family: var(--font-app);
+  font-weight: var(--font-app-weight);
+  font-size: calc(16px * var(--font-scale));
   background-image:
     radial-gradient(ellipse 80% 50% at 70% -10%, rgba(201, 164, 92, 0.07), transparent),
     radial-gradient(ellipse 60% 40% at 10% 110%, rgba(200, 64, 42, 0.05), transparent);
   background-attachment: fixed;
   min-height: 100dvh;
+}
+
+/* ===== 浅色主题（仪式感宣纸底） ===== */
+html[data-theme="light"] body {
+  background: #faf6ec;
+  color: #2b2519;
+  background-image:
+    radial-gradient(ellipse 80% 50% at 70% -10%, rgba(201, 164, 92, 0.14), transparent),
+    radial-gradient(ellipse 60% 40% at 10% 110%, rgba(200, 64, 42, 0.08), transparent);
+}
+
+html[data-theme="light"] .card-xuan {
+  background: linear-gradient(160deg, rgba(255, 252, 244, 0.94), rgba(245, 238, 220, 0.94));
+  border-color: rgba(154, 116, 58, 0.35);
+}
+html[data-theme="light"] .panel-console {
+  background: linear-gradient(165deg, rgba(255, 252, 244, 0.96), rgba(248, 240, 222, 0.96));
+  border-color: rgba(154, 116, 58, 0.35);
+}
+html[data-theme="light"] .text-paper-100,
+html[data-theme="light"] .text-paper-200,
+html[data-theme="light"] .text-paper-300 { color: #2b2519; }
+html[data-theme="light"] .text-paper-400 { color: #6c5d3b; }
+html[data-theme="light"] .text-paper-500 { color: #97865e; }
+html[data-theme="light"] .input-xuan {
+  background: rgba(255, 252, 244, 0.85);
+  border-color: rgba(154, 116, 58, 0.35);
+  color: #2b2519;
+}
+html[data-theme="light"] .input-xuan::placeholder { color: #97865e; }
+html[data-theme="light"] .bg-ink-900\/40,
+html[data-theme="light"] .bg-ink-900\/50,
+html[data-theme="light"] .bg-ink-900\/60 {
+  background-color: rgba(255, 252, 244, 0.6) !important;
+}
+html[data-theme="light"] .bg-ink-800\/60 { background-color: rgba(220, 205, 165, 0.5) !important; }
+html[data-theme="light"] .border-gold-500\/15,
+html[data-theme="light"] .border-gold-500\/20,
+html[data-theme="light"] .border-gold-500\/30,
+html[data-theme="light"] .border-gold-500\/35,
+html[data-theme="light"] .border-gold-500\/40 { border-color: rgba(154, 116, 58, 0.35) !important; }
+html[data-theme="light"] .btn-ghost { color: #83652f; }
+html[data-theme="light"] header.bg-ink-950\/90,
+html[data-theme="light"] footer.bg-ink-950\/90 { background-color: rgba(250, 246, 236, 0.92) !important; }
+html[data-theme="light"] aside.bg-ink-900\/40 { background-color: rgba(245, 238, 220, 0.6) !important; }
+html[data-theme="light"] .hud-grid {
+  background-image:
+    linear-gradient(rgba(154, 116, 58, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(154, 116, 58, 0.1) 1px, transparent 1px);
+}
+
+/* ===== Markdown 增强样式（AI 解读 / 解梦结果共用） ===== */
+.md {
+  font-family: var(--font-app);
+  line-height: 1.85;
+  color: var(--color-paper-200);
+  word-break: break-word;
+}
+.md > * + * { margin-top: 0.85em; }
+.md h1, .md h2, .md h3, .md h4 {
+  color: var(--color-gold-300);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-top: 1.4em;
+  margin-bottom: 0.5em;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6em;
+}
+.md h1 { font-size: 1.35em; border-bottom: 1px solid rgba(201, 164, 92, 0.2); padding-bottom: 0.3em; }
+.md h2 { font-size: 1.18em; }
+.md h3 { font-size: 1.06em; color: var(--color-paper-100); }
+.md h4 { font-size: 1em; }
+.md h1::before, .md h2::before, .md h3::before {
+  content: "";
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--color-gold-500), var(--color-gold-700));
+  box-shadow: 0 0 8px rgba(201, 164, 92, 0.4);
+  display: inline-block;
+  flex: none;
+}
+.md p { margin: 0.85em 0; }
+.md strong { color: var(--color-gold-300); font-weight: 700; }
+.md em { color: var(--color-cinnabar-400); font-style: normal; padding: 0 0.15em; }
+.md ul, .md ol { padding-left: 1.4em; }
+.md li { margin: 0.35em 0; padding-left: 0.25em; }
+.md li::marker { color: var(--color-gold-500); }
+.md blockquote {
+  margin: 1em 0;
+  padding: 0.6em 1em;
+  border-left: 3px solid var(--color-gold-500);
+  background: rgba(201, 164, 92, 0.06);
+  color: var(--color-paper-300);
+  border-radius: 0 8px 8px 0;
+  font-style: italic;
+}
+.md code {
+  background: rgba(201, 164, 92, 0.12);
+  color: var(--color-gold-300);
+  padding: 0.12em 0.4em;
+  border-radius: 4px;
+  font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+  font-size: 0.92em;
+}
+.md pre {
+  background: rgba(11, 9, 7, 0.7);
+  border: 1px solid rgba(201, 164, 92, 0.18);
+  padding: 0.85em 1em;
+  border-radius: 10px;
+  overflow-x: auto;
+}
+.md pre code { background: none; padding: 0; }
+.md hr {
+  border: none;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(201, 164, 92, 0.45), transparent);
+  margin: 1.6em 0;
+}
+.md table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 0.94em;
+}
+.md th, .md td {
+  border: 1px solid rgba(201, 164, 92, 0.2);
+  padding: 0.5em 0.8em;
+  text-align: left;
+}
+.md th {
+  background: rgba(201, 164, 92, 0.1);
+  color: var(--color-gold-300);
+  font-weight: 700;
+}
+.md a {
+  color: var(--color-cyber-400);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.md .callout {
+  margin: 1em 0;
+  padding: 0.7em 1em;
+  border: 1px solid rgba(201, 164, 92, 0.3);
+  border-left: 4px solid var(--color-gold-500);
+  background: rgba(201, 164, 92, 0.05);
+  border-radius: 6px;
+}
+
+/* 减弱动效偏好 */
+html[data-reduce-motion="true"] *,
+html[data-reduce-motion="true"] *::before,
+html[data-reduce-motion="true"] *::after {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
 }
 
 ::selection {

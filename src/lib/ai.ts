@@ -264,14 +264,38 @@ export async function resolveUsableSettings(): Promise<AiSettings> {
 
 // ===== 解读提示词 =====
 
-const SYSTEM_PROMPT = `你是一位精通中华传统术数（八字、紫微斗数、奇门遁甲、大六壬、六爻、梅花易数、太乙神数、皇极经世、五运六气、风水堪舆）与西方占星、塔罗的资深命理解读师。
-要求：
-1. 基于用户提供的结构化排盘数据进行解读，引用其中具体信息（干支、十神、星曜、卦象、牌面等）作为依据，不得编造数据之外的事实。
-2. 语言通俗温和、条理清晰，用「总览 → 分领域详解 → 建议」的结构。
-3. 不做绝对化断言（如"必定""一定"），不使用恐吓性措辞；涉及健康、重大财务决策时提醒仅供参考。
-4. 适当使用小标题与条目，中文输出，篇幅 400–800 字。`;
+import type { AppSettings } from "./settings";
 
-export function buildInterpretMessages(topic: string, question: string | undefined, data: unknown): ChatMessage[] {
+const STYLE_PROMPTS: Record<AppSettings["aiTemplate"], string> = {
+  concise: `采用「极简版」排版：仅输出 1) 一句话总览，2) 三条要点（用 - 列表），3) 一句行动建议。
+整段控制在 150 字内，语言干净、不堆砌形容词。`,
+  standard: `采用「标准版」排版：使用 H2 标题分块（建议板块：「总览」「性格与天赋」「事业财运」「感情人际」「健康与作息」「近期提示」）。
+每个标题下用 1–3 段白话 + 关键信息用 **加粗** 凸显。篇幅 400–700 字。`,
+  detailed: `采用「详尽版」排版：除「总览」外，依次输出
+1) 性格与天赋（含具体依据）
+2) 事业与财运（行业倾向、节奏）
+3) 感情与人际（相处方式、注意事项）
+4) 健康与作息（体质倾向、宜忌）
+5) 时运节点（近期 3–6 个月要点）
+6) 三条具体建议
+每节用 H2 标题，行间适当用 - 列表；篇幅 800–1500 字。`,
+  classical: `采用「文言版」风格：用半文半白的语气解读，避免口语化词。
+输出结构：1) 总论（文言短句），2) 分项赋文（每项一两句四字对仗），3) 启示（白话一段）。
+保留文言之美又不失可读性，篇幅 500–900 字。`,
+};
+
+const SYSTEM_PROMPT_BASE = `你是一位精通中华传统术数（八字、紫微斗数、奇门遁甲、大六壬、六爻、梅花易数、太乙神数、皇极经世、五运六气、风水堪舆）与西方占星、塔罗的资深命理解读师。
+要求：
+1. 严格基于用户提供的结构化排盘数据进行解读，引用其中具体信息（干支、十神、星曜、卦象、牌面等）作为依据，不得编造数据之外的事实。
+2. 语言通俗温和、条理清晰；不做绝对化断言（如「必定」「一定」），不使用恐吓性措辞；涉及健康、重大财务决策时提醒仅供参考。
+3. 中文输出，标题用 H2 或 H3（## 或 ###），关键信息用 **加粗** 凸显；需要时可使用 - 列表、> 引用、| 表格。`;
+
+export function buildInterpretMessages(
+  topic: string,
+  question: string | undefined,
+  data: unknown,
+  settings?: AppSettings,
+): ChatMessage[] {
   let json: string;
   try {
     json = JSON.stringify(data, null, 1) ?? "";
@@ -279,12 +303,15 @@ export function buildInterpretMessages(topic: string, question: string | undefin
     json = String(data);
   }
   if (json.length > 14000) json = json.slice(0, 14000) + "\n…（数据过长已截断）";
+  const style = STYLE_PROMPTS[settings?.aiTemplate ?? "standard"];
   const user =
     `【解读主题】${topic}\n` +
     (question ? `【所问之事】${question}\n` : "") +
-    `【排盘数据】\n${json}\n\n请基于以上数据进行解读。`;
+    `【排盘数据】\n${json}\n\n` +
+    style +
+    `\n\n请基于以上数据进行解读。`;
   return [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: SYSTEM_PROMPT_BASE },
     { role: "user", content: user },
   ];
 }
