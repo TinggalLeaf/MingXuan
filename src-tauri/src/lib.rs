@@ -802,7 +802,7 @@ async fn huangli_lookup(date: String) -> Result<serde_json::Value, String> {
         .map(|c| c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default())
         .map(|s| s.lines().map(|x| x.trim().to_string()).filter(|x| !x.is_empty() && x.chars().count() >= 4).collect())
         .unwrap_or_default();
-    let harvest: Vec<String> = regex::Regex::new(r"七月丰歉歌\s*\n([\s\S]*?)\n\s*\n时辰")
+    let harvest: Vec<String> = regex::Regex::new(r"七月丰歉歌\s*\n([\s\S]*?)\n时辰")
         .ok().and_then(|re| re.captures(&text))
         .map(|c| c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default())
         .map(|s| s.lines().map(|x| x.trim().to_string()).filter(|x| !x.is_empty() && x.chars().count() >= 4).collect())
