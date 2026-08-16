@@ -1,0 +1,290 @@
+/**
+ * AI 解读核心。
+ *
+ * 默认【内置直连】：无需任何本地服务或配置——
+ *   · Tauri 桌面端：由 Rust 后端带 HMAC 签名直连 Cherry 上游（cherry_studio_proxy 同款方案）；
+ *   · 浏览器开发态：前端用 WebCrypto 计算同样的签名直连。
+ * 可选【自定义服务】：任意 OpenAI 兼容接口（Tauri 下经 Rust 转发规避 CORS）。
+ */
+
+import { invoke, Channel } from "@tauri-apps/api/core";
+
+const LS_KEY = "mingxuan.ai.settings";
+
+export interface AiSettings {
+  mode: "builtin" | "custom";
+  /** custom 模式：OpenAI 兼容服务地址 */
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  /** builtin 模式下的模型展示名 */
+  builtinModel: string;
+}
+
+export const AI_DEFAULTS: AiSettings = {
+  mode: "builtin",
+  baseUrl: import.meta.env.VITE_AI_BASE_URL || "http://localhost:8000",
+  apiKey: import.meta.env.VITE_AI_API_KEY || "",
+  model: import.meta.env.VITE_AI_MODEL || "qwen-8b",
+  builtinModel: "qwen-8b",
+};
+
+export const BUILTIN_MODELS = ["qwen-8b"];
+
+/** 是否运行在 Tauri 桌面环境 */
+export const isTauri =
+  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+export function loadAiSettings(): AiSettings {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (raw) return { ...AI_DEFAULTS, ...JSON.parse(raw) };
+  } catch {
+    /* ignore */
+  }
+  return { ...AI_DEFAULTS };
+}
+
+export function saveAiSettings(s: AiSettings) {
+  localStorage.setItem(LS_KEY, JSON.stringify(s));
+}
+
+export function normalizeBaseUrl(url: string): string {
+  return url.trim().replace(/\/+$/, "").replace(/\/v1$/, "");
+}
+
+export interface ChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+// ===== 模型列表 =====
+
+export async function fetchAiModels(s: AiSettings): Promise<string[]> {
+  if (s.mode === "builtin") {
+    if (isTauri) return invoke<string[]>("cherry_models");
+    return BUILTIN_MODELS;
+  }
+  if (isTauri) {
+    return invoke<string[]>("ai_models", { baseUrl: s.baseUrl, apiKey: s.apiKey });
+  }
+  const res = await fetch(`${normalizeBaseUrl(s.baseUrl)}/v1/models`, {
+    headers: s.apiKey ? { Authorization: `Bearer ${s.apiKey}` } : {},
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error(`模型列表请求失败：HTTP ${res.status}`);
+  const data = await res.json();
+  return ((data?.data ?? []) as { id?: string }[]).map((m) => m.id!).filter(Boolean);
+}
+
+// ===== 流式对话 =====
+
+export async function chatStream(
+  s: AiSettings,
+  messages: ChatMessage[],
+  onChunk: (delta: string, full: string) => void,
+  signal?: AbortSignal
+): Promise<string> {
+  if (s.mode === "builtin") {
+    if (isTauri) return streamViaRust("cherry_chat_stream", { model: s.builtinModel, messages }, onChunk);
+    return streamViaBrowserCherry(s.builtinModel, messages, onChunk, signal);
+  }
+  if (isTauri) {
+    return streamViaRust(
+      "ai_chat_stream",
+      { baseUrl: s.baseUrl, apiKey: s.apiKey, model: s.model, messages },
+      onChunk
+    );
+  }
+  return streamViaBrowserFetch(s, messages, onChunk, signal);
+}
+
+/** Tauri Channel 流式接收 */
+async function streamViaRust(
+  command: string,
+  args: Record<string, unknown>,
+  onChunk: (delta: string, full: string) => void
+): Promise<string> {
+  let full = "";
+  const channel = new Channel<string>();
+  channel.onmessage = (payload) => {
+    if (payload === "[DONE]") return;
+    const delta = parseDelta(payload);
+    if (delta) {
+      full += delta;
+      onChunk(delta, full);
+    }
+  };
+  await invoke(command, { ...args, onEvent: channel });
+  return full;
+}
+
+/** 浏览器：自定义 OpenAI 兼容服务直连 */
+async function streamViaBrowserFetch(
+  s: AiSettings,
+  messages: ChatMessage[],
+  onChunk: (delta: string, full: string) => void,
+  signal?: AbortSignal
+): Promise<string> {
+  const res = await fetch(`${normalizeBaseUrl(s.baseUrl)}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(s.apiKey ? { Authorization: `Bearer ${s.apiKey}` } : {}),
+    },
+    body: JSON.stringify({ model: s.model, messages, stream: true, temperature: 0.7 }),
+    signal,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`AI 请求失败：HTTP ${res.status} ${text.slice(0, 200)}`);
+  }
+  if (!res.body) throw new Error("AI 服务未返回数据流");
+  return pumpFetchStream(res.body.getReader(), onChunk);
+}
+
+// ===== 浏览器端 Cherry 直连（WebCrypto 签名） =====
+
+const CHERRY_BASE_URL = "https://api.cherry-ai.com";
+const CHERRY_CHAT_PATH = "/chat/completions";
+const CHERRY_CLIENT_ID = "cherry-studio";
+const CHERRY_SIGNING_SECRET =
+  "K3RNPFx19hPh1AHr5E1wBEFfi4uYUjoCFuzjDzvS9cAWD8KuKJR8FOClwUpGqRRX.GvI6I5ZrEHcGOWjO5AKhJKGmnwwGfM62XKpWqkjhvzRU2NZIinM77aTGIqhqys0g";
+
+let cachedKey: Promise<CryptoKey> | null = null;
+function cherryKey(): Promise<CryptoKey> {
+  if (!cachedKey) {
+    cachedKey = crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(CHERRY_SIGNING_SECRET),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+  }
+  return cachedKey;
+}
+
+async function cherrySign(method: string, path: string, body: string) {
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const raw = [method.toUpperCase(), path, "", CHERRY_CLIENT_ID, timestamp, body].join("\n");
+  const key = await cherryKey();
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(raw));
+  const hex = [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return { timestamp, signature: hex };
+}
+
+async function streamViaBrowserCherry(
+  model: string,
+  messages: ChatMessage[],
+  onChunk: (delta: string, full: string) => void,
+  signal?: AbortSignal
+): Promise<string> {
+  const upstream = model === "qwen-8b" ? "qwen" : model;
+  const body = JSON.stringify({ model: upstream, messages, stream: true, temperature: 0.7 });
+  const { timestamp, signature } = await cherrySign("POST", CHERRY_CHAT_PATH, body);
+  const res = await fetch(`${CHERRY_BASE_URL}${CHERRY_CHAT_PATH}`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json, text/event-stream",
+      "Content-Type": "application/json",
+      "X-Client-ID": CHERRY_CLIENT_ID,
+      "X-Timestamp": timestamp,
+      "X-Signature": signature,
+      "X-Title": "Cherry Studio",
+      "HTTP-Referer": "https://cherry-ai.com",
+    },
+    body,
+    signal,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`AI 服务返回 HTTP ${res.status}：${text.slice(0, 300)}`);
+  }
+  if (!res.body) throw new Error("AI 服务未返回数据流");
+  return pumpFetchStream(res.body.getReader(), onChunk);
+}
+
+// ===== 公共工具 =====
+
+async function pumpFetchStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  onChunk: (delta: string, full: string) => void
+): Promise<string> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let full = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const payload = trimmed.slice(5).trim();
+      if (payload === "[DONE]" || !payload) continue;
+      const delta = parseDelta(payload);
+      if (delta) {
+        full += delta;
+        onChunk(delta, full);
+      }
+    }
+  }
+  return full;
+}
+
+function parseDelta(payload: string): string {
+  try {
+    const json = JSON.parse(payload);
+    return json.choices?.[0]?.delta?.content ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** 免配置兜底：自定义模式下若模型不可用，自动选第一个可用模型 */
+export async function resolveUsableSettings(): Promise<AiSettings> {
+  const s = loadAiSettings();
+  if (s.mode === "custom") {
+    try {
+      const models = await fetchAiModels(s);
+      if (models.length > 0 && !models.includes(s.model)) {
+        const next = { ...s, model: models[0] };
+        saveAiSettings(next);
+        return next;
+      }
+    } catch {
+      /* 服务未启动等情况，交给调用方报错 */
+    }
+  }
+  return s;
+}
+
+// ===== 解读提示词 =====
+
+const SYSTEM_PROMPT = `你是一位精通中华传统术数（八字、紫微斗数、奇门遁甲、大六壬、六爻、梅花易数、太乙神数、皇极经世、五运六气、风水堪舆）与西方占星、塔罗的资深命理解读师。
+要求：
+1. 基于用户提供的结构化排盘数据进行解读，引用其中具体信息（干支、十神、星曜、卦象、牌面等）作为依据，不得编造数据之外的事实。
+2. 语言通俗温和、条理清晰，用「总览 → 分领域详解 → 建议」的结构。
+3. 不做绝对化断言（如"必定""一定"），不使用恐吓性措辞；涉及健康、重大财务决策时提醒仅供参考。
+4. 适当使用小标题与条目，中文输出，篇幅 400–800 字。`;
+
+export function buildInterpretMessages(topic: string, question: string | undefined, data: unknown): ChatMessage[] {
+  let json: string;
+  try {
+    json = JSON.stringify(data, null, 1) ?? "";
+  } catch {
+    json = String(data);
+  }
+  if (json.length > 14000) json = json.slice(0, 14000) + "\n…（数据过长已截断）";
+  const user =
+    `【解读主题】${topic}\n` +
+    (question ? `【所问之事】${question}\n` : "") +
+    `【排盘数据】\n${json}\n\n请基于以上数据进行解读。`;
+  return [
+    { role: "system", content: SYSTEM_PROMPT },
+    { role: "user", content: user },
+  ];
+}
