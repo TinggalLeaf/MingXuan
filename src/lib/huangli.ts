@@ -1,52 +1,159 @@
 /**
  * 黄历宜忌 · 本地数据服务
  *
- * 数据来源：huangli123.net/huangli/ 公历每日黄历页。
- * 抓取脚本：scripts/crawl-huangli.mjs（pnpm crawl:huangli）
- * 数据文件：public/huangli-2026.json（含近 1 年每日宜忌、神煞、吉时、冲煞、胎神等）
+ * 数据源：https://www.huangli123.net/huangli/yyyy-mm-dd.html
+ * 抓取由 Rust 后端 `huangli_lookup` 完成（绕过 CORS），返回结构化 JSON。
  *
- * 浏览器/Tauri 通用；离线可用；按需懒加载。
+ * 字段完整覆盖原页所有板块：
+ *   干支时辰、八字、纳音、五行、节气、值神、十二神、六耀、神煞、宜忌、
+ *   财/喜/福/贵/胎神方位、相冲、吉凶时、神煞、空亡、九宫飞星、星宿、
+ *   河图洛书、卦象、农历信息、嫁娶表、犯太岁表、十二时辰完整明细、五行旺衰...
  */
+
+export interface HuangliHour {
+  /** 时辰名（子/丑/.../亥） */
+  shichen: string;
+  /** 时段（如 23:00-00:59） */
+  timeRange: string;
+  /** 干支（如 壬子） */
+  ganzhi: string;
+  /** 星神（截路/玉堂/天牢/玄武...） */
+  starGod: string;
+  /** 正冲（与哪个时辰相冲） */
+  chong: string;
+  /** 吉 / 凶 */
+  fortune: "吉" | "凶";
+  /** 生肖 */
+  zodiac: string;
+  /** 吉神列表 */
+  luckyGods: string[];
+  /** 凶煞列表 */
+  evilGods: string[];
+  /** 时宜列表 */
+  yi: string[];
+  /** 时忌列表 */
+  ji: string[];
+  /** 五行 */
+  wuxing: string;
+  /** 煞方 */
+  shaDirection: string;
+  /** 财神方位 */
+  caiShen: string;
+  /** 喜神方位 */
+  xiShen: string;
+  /** 五行旺衰百分比（按 金木水火土 顺序） */
+  wuxingPct: number[];
+}
 
 export interface HuangliDay {
   /** 公历 yyyy-mm-dd */
   date: string;
-  /** 农历日期（如：二零二六年二月十五） */
+  /** 周几（用于表格展示） */
+  week?: string;
+  /** 农历文本（如：丙午年 七月初五 小月） */
   lunar: string;
-  /** 干支日（如：壬寅） */
-  ganzhiDay: string;
-  /** 干支月 */
-  ganzhiMonth: string;
-  /** 干支年 */
+  /** 节日（仅在 tyme4ts 兜底时有值） */
+  festival?: string;
+  /** 法定假日 */
+  legalHoliday?: string;
+  /** 完整四柱（年柱、月柱、日柱） */
   ganzhiYear: string;
-  /** 生肖年（如：虎） */
+  ganzhiMonth: string;
+  ganzhiDay: string;
+  /** 生肖年（如：马） */
   zodiac: string;
-  /** 五行日（如：剑锋金） */
-  wuxingDay?: string;
-  /** 宜（数组） */
+  /** 星座（如：狮子座） */
+  constellation: string;
+  /** 五行（年/月/日 - 如 天河水 / 山下火 / 大海水） */
+  wuxingYear: string;
+  wuxingMonth: string;
+  wuxingDay: string;
+  /** 甲子五行（数字编码，如 甲子五行 = 水） */
+  wuxingNumeric: string;
+  /** 节气（当前 + 下一个 + 时间） */
+  solarTerm: { name: string; date: string; time?: string };
+  nextSolarTerm?: { name: string; date: string; time?: string };
+  /** 值神 */
+  dutyGod: string;
+  /** 十二神 */
+  twelveStar: string;
+  /** 六耀 */
+  liuYao: string;
+  /** 日禄 */
+  riLu: string;
+  /** 公历完整 */
+  solarFull: string;
+  /** 农历完整 */
+  lunarFull: string;
+  /** 农历详情（年柱 月柱 日柱） */
+  pillars: string;
+  /** 农历总天数 */
+  lunarYearDays: { year: string; total: number; range: string; passed: number; remaining: number };
+  /** 月令、物候、月相 */
+  monthState: { monthOrder: string; phenology: string; phase: string };
+  /** 宜（完整列表） */
   yi: string[];
-  /** 忌（数组） */
+  /** 忌（完整列表） */
   ji: string[];
-  /** 冲煞（如：冲猴煞北） */
-  chongsha?: string;
-  /** 胎神方位 */
-  taishen?: string;
+  /** 神煞方位 */
+  caiShen: string;
+  xiShen: string;
+  fuShen: string;
+  guiShen: { yang: string; yin: string };
+  /** 胎神 */
+  taiShen: { month: string; day: string; direction?: string };
+  /** 相冲 */
+  chong: string;
+  /** 吉神宜趋 */
+  luckyGods: string[];
+  /** 凶煞宜忌 */
+  evilGods: string[];
   /** 彭祖百忌 */
-  pengzu?: string;
-  /** 吉时（数组） */
-  luckyHours?: string[];
-  /** 凶时（数组） */
-  unluckyHours?: string[];
-  /** 五行值（数值越大能量越强） */
-  wuxingValue?: number;
-  /** 节气 */
-  solarTerm?: string;
+  pengzu: string[];
+  /** 大殓吉时 */
+  daLianLuckyHours: string[];
+  /** 空亡所值 */
+  kongWang: { year: string; month: string; day: string };
+  /** 九宫飞星 */
+  nineStar: { name: string; description: string; poem: string };
+  /** 今日星宿 */
+  starSign: string;
+  /** 的呼勿近 */
+  riHu: string;
+  /** 今日冲合 */
+  chongHe: string[];
+  /** 三煞方 */
+  sanSha: { year: string; month: string; day: string };
+  /** 七煞方 */
+  qiSha: { year: string; month: string; day: string };
+  /** 岁煞 / 月煞 */
+  suiSha: { year: string; month: string };
+  /** 今日河图洛书九星吉凶 */
+  luoshu: { name: string; poem: string; front: string; back: string; interpretation: string };
+  /** 今日卦象（剥卦） */
+  gua: { name: string; symbol: string; structure: string; description: string };
+  /** 十二时辰完整 */
+  hours: HuangliHour[];
+  /** 今日十二神吉凶所主 */
+  twelveStarPoem: string;
+  /** 今日二十八星宿吉凶 */
+  starSignPoem: string;
+  /** 地母经 */
+  dimu: string[];
+  /** 地母经诗 */
+  dimuPoem: string[];
+  /** 七/十二月丰歉歌 */
+  harvestPoem: string[];
+  /** 嫁娶吉凶表（仅生日当天） */
+  marriageTable: { forbidden: string[]; allowed: string[] };
+  /** 来源 */
+  source?: string;
 }
 
 let cache: Map<string, HuangliDay> | null = null;
 let loadPromise: Promise<Map<string, HuangliDay>> | null = null;
 
-/** 懒加载本地 JSON 数据 */
+/** 懒加载本地 JSON 数据（备用） */
 export async function loadHuangliDb(): Promise<Map<string, HuangliDay>> {
   if (cache) return cache;
   if (loadPromise) return loadPromise;
@@ -61,7 +168,7 @@ export async function loadHuangliDb(): Promise<Map<string, HuangliDay>> {
       }
       cache = m;
       return m;
-    } catch (e) {
+    } catch {
       cache = new Map();
       return cache;
     }
@@ -100,7 +207,6 @@ export function formatDate(d: Date): string {
 
 /** 黄历日吉凶打分（基于宜忌数量） */
 export function luckyScore(day: HuangliDay): number {
-  // 宜多吉、忌少凶；返回 0-100
   const good = day.yi.length;
   const bad = day.ji.length;
   if (good + bad === 0) return 50;
