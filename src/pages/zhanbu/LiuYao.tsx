@@ -66,12 +66,12 @@ function LiuYaoClient() {
     try {
       const date = buildDate(customDate);
       const options: LiuyaoGenerationOptions = { method };
-      if (method === "coins" && yaos.length === 6) {
-        options.yaos = yaos;
+      if (method === "coins" && coinThrows.length === 6) {
+        // coins 方法：库自动由 coinThrows 推算六爻，禁止同时传 yaos
         options.coinThrows = coinThrows;
       } else if (method === "manual") {
-        // 直接随机：不传 yaos，由算法随机
-        delete options.yaos;
+        // 手工输入：库只接受 yaos
+        options.yaos = yaos;
       }
       const result = generateLiuyao(date, options);
       setData(result);
@@ -98,7 +98,7 @@ function LiuYaoClient() {
         setYaos={(v) => {
           setYaos(v);
           if (v.length === 6) {
-            // 自动起卦
+            // 自动起卦：coins 方法只传 coinThrows，库自动由三钱推算六爻
             setTimeout(() => {
               setError(null);
               setBusy(true);
@@ -106,7 +106,6 @@ function LiuYaoClient() {
                 const date = buildDate(customDate);
                 const opts: LiuyaoGenerationOptions = {
                   method: "coins",
-                  yaos: v,
                   coinThrows,
                 };
                 setData(generateLiuyao(date, opts));
