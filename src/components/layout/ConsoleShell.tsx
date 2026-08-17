@@ -55,7 +55,10 @@ const NAV_SECTIONS = [
   {
     code: "SYS.07",
     label: "系统",
-    items: [{ to: "/settings", label: "设置中心" }],
+    items: [
+      { to: "/naming", label: "起名 · 三才五格" },
+      { to: "/settings", label: "设置中心" },
+    ],
   },
 ];
 

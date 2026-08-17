@@ -22,6 +22,7 @@ import Tarot from "@/pages/zhanbu/Tarot";
 import Lingqian from "@/pages/zhanbu/Lingqian";
 import Dream from "@/pages/Dream";
 import Settings from "@/pages/Settings";
+import Naming from "@/pages/Naming";
 import Updater from "@/components/updater/Updater";
 
 export default function App() {
@@ -51,6 +52,7 @@ export default function App() {
           <Route path="/zhanbu/tarot" element={<Tarot />} />
           <Route path="/zhanbu/lingqian" element={<Lingqian />} />
           <Route path="/dream" element={<Dream />} />
+          <Route path="/naming" element={<Naming />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Home />} />
         </Route>
