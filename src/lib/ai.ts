@@ -11,25 +11,56 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 
 const LS_KEY = "mingxuan.ai.settings";
 
+export type AiProvider = "builtin" | "kilo" | "kimi" | "custom";
+
 export interface AiSettings {
-  mode: "builtin" | "custom";
-  /** custom 模式：OpenAI 兼容服务地址 */
+  provider: AiProvider;
+  /** builtin: 固定 Cherry 上游；kilo/kimi/custom: OpenAI 兼容服务 */
   baseUrl: string;
   apiKey: string;
   model: string;
-  /** builtin 模式下的模型展示名 */
+  /** builtin 模式下的模型展示名（Cherry 内置） */
   builtinModel: string;
+  /** 上次拉取的模型列表缓存（仅 UI 展示用） */
+  cachedModels: string[];
 }
 
 export const AI_DEFAULTS: AiSettings = {
-  mode: "builtin",
+  provider: "builtin",
   baseUrl: import.meta.env.VITE_AI_BASE_URL || "http://localhost:8000",
   apiKey: import.meta.env.VITE_AI_API_KEY || "",
   model: import.meta.env.VITE_AI_MODEL || "qwen-8b",
   builtinModel: "qwen-8b",
+  cachedModels: [],
 };
 
 export const BUILTIN_MODELS = ["qwen-8b"];
+
+/** 各 provider 的默认 baseUrl（用户可改） */
+export const PROVIDER_DEFAULTS: Record<AiProvider, { baseUrl: string; label: string; desc: string; docsUrl?: string }> = {
+  builtin: {
+    baseUrl: "",
+    label: "内置直连（Cherry）",
+    desc: "由 Rust 后端 HMAC 签名直连 Cherry 上游，零配置",
+  },
+  kilo: {
+    baseUrl: "http://localhost:8080/v1",
+    label: "Kilo 免费模型",
+    desc: "需先运行 kilo_auto（https://github.com/XxxXTeam/kilo_auto），开放 Kilo 全量免费模型（grok/qwen/deepseek 等）",
+    docsUrl: "https://github.com/XxxXTeam/kilo_auto",
+  },
+  kimi: {
+    baseUrl: "http://localhost:8000/v1",
+    label: "Kimi 公开 Demo",
+    desc: "需先运行 kimi_ai_chat2api（https://github.com/XxxXTeam/kimi_ai_chat2api），可免 Key 调用 kimi-ai-chat",
+    docsUrl: "https://github.com/XxxXTeam/kimi_ai_chat2api",
+  },
+  custom: {
+    baseUrl: "http://localhost:8000",
+    label: "自定义 OpenAI 兼容服务",
+    desc: "任意兼容 OpenAI Chat Completions API 的服务（vLLM / Ollama / OneAPI 等）",
+  },
+};
 
 /** 是否运行在 Tauri 桌面环境 */
 export const isTauri =
@@ -61,7 +92,7 @@ export interface ChatMessage {
 // ===== 模型列表 =====
 
 export async function fetchAiModels(s: AiSettings): Promise<string[]> {
-  if (s.mode === "builtin") {
+  if (s.provider === "builtin") {
     if (isTauri) return invoke<string[]>("cherry_models");
     return BUILTIN_MODELS;
   }
@@ -85,7 +116,7 @@ export async function chatStream(
   onChunk: (delta: string, full: string) => void,
   signal?: AbortSignal
 ): Promise<string> {
-  if (s.mode === "builtin") {
+  if (s.provider === "builtin") {
     if (isTauri) return streamViaRust("cherry_chat_stream", { model: s.builtinModel, messages }, onChunk);
     return streamViaBrowserCherry(s.builtinModel, messages, onChunk, signal);
   }
@@ -247,7 +278,7 @@ function parseDelta(payload: string): string {
 /** 免配置兜底：自定义模式下若模型不可用，自动选第一个可用模型 */
 export async function resolveUsableSettings(): Promise<AiSettings> {
   const s = loadAiSettings();
-  if (s.mode === "custom") {
+  if (s.provider !== "builtin") {
     try {
       const models = await fetchAiModels(s);
       if (models.length > 0 && !models.includes(s.model)) {

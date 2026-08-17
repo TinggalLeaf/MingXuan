@@ -28,7 +28,7 @@ import {
 } from "@/lib/profiles";
 import {
   AI_DEFAULTS, BUILTIN_MODELS, fetchAiModels, loadAiSettings,
-  saveAiSettings, type AiSettings,
+  saveAiSettings, type AiSettings, PROVIDER_DEFAULTS,
 } from "@/lib/ai";
 
 const SECTIONS = [
@@ -225,6 +225,17 @@ function AiSection() {
     setSettings((s) => ({ ...s, ...patch }));
   }
 
+  function switchProvider(p: typeof settings.provider) {
+    const def = PROVIDER_DEFAULTS[p];
+    update({
+      provider: p,
+      baseUrl: def.baseUrl || settings.baseUrl,
+      model: p === "builtin" ? settings.builtinModel : settings.model,
+    });
+    setResult("");
+    setModels([]);
+  }
+
   async function test() {
     setTesting(true);
     setResult("");
@@ -232,7 +243,7 @@ function AiSection() {
       const list = await fetchAiModels(settings);
       setModels(list);
       setResult("ok");
-      if (settings.mode === "custom" && list.length > 0 && !list.includes(settings.model)) {
+      if (settings.provider !== "builtin" && list.length > 0 && !list.includes(settings.model)) {
         update({ model: list[0] });
       }
     } catch {
@@ -243,40 +254,42 @@ function AiSection() {
   }
 
   function save() {
-    saveAiSettings(settings);
+    saveAiSettings({ ...settings, cachedModels: models });
     window.dispatchEvent(new CustomEvent("mx-ai-settings-changed"));
     alert("已保存");
   }
 
+  const provider = settings.provider;
+  const def = PROVIDER_DEFAULTS[provider];
+
   return (
     <SectionCard
       title="AI 大模型配置"
-      desc="默认「内置直连」由 Tauri Rust 后端 HMAC 签名直连 Cherry 上游，无需 API Key；也可切换自定义 OpenAI 兼容服务。"
+      desc="支持 4 个渠道：内置直连（Cherry HMAC 签名）、Kilo 免费模型、Kimi 公开 Demo、自定义 OpenAI 兼容服务。"
     >
-      <div className="grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          onClick={() => update({ mode: "builtin" })}
-          className={`tab-chip text-center text-sm ${settings.mode === "builtin" ? "is-active" : ""}`}
-        >
-          内置直连（推荐）
-        </button>
-        <button
-          type="button"
-          onClick={() => update({ mode: "custom" })}
-          className={`tab-chip text-center text-sm ${settings.mode === "custom" ? "is-active" : ""}`}
-        >
-          自定义服务
-        </button>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {(["builtin", "kilo", "kimi", "custom"] as const).map((p) => (
+          <button
+            key={p}
+            type="button"
+            onClick={() => switchProvider(p)}
+            className={`tab-chip text-center text-xs sm:text-sm ${provider === p ? "is-active" : ""}`}
+            title={PROVIDER_DEFAULTS[p].desc}
+          >
+            {PROVIDER_DEFAULTS[p].label}
+          </button>
+        ))}
       </div>
+      <p className="mt-2 text-[11px] leading-relaxed text-paper-400">{def.desc}</p>
 
       <div className="mt-4 space-y-3">
-        {settings.mode === "builtin" ? (
-          <>
-            <div className="rounded-lg border border-jade-500/25 bg-jade-500/8 p-3 text-[11px] leading-relaxed text-paper-300">
-              内置 AI 通道已就绪：由本地 Rust 后端加密直连，无需 API Key、无需启动任何服务，开箱即用。
-            </div>
-            <label className="block">
+        {provider === "builtin" ? (
+          <div className="rounded-lg border border-jade-500/25 bg-jade-500/8 p-3">
+            <p className="text-[11px] leading-relaxed text-paper-300">
+              <Check className="mr-1 inline h-3 w-3 text-jade-400" />
+              内置 AI 通道已就绪：由本地 Rust 后端 HMAC 签名直连 Cherry 上游，<b>无需 API Key</b>，开箱即用。
+            </p>
+            <label className="mt-3 block">
               <span className="console-label mb-1 block">模型</span>
               <select
                 className="input-xuan w-full"
@@ -288,20 +301,21 @@ function AiSection() {
                 ))}
               </select>
             </label>
-          </>
+          </div>
         ) : (
-          <>
+          <div className="space-y-3 rounded-lg border border-gold-500/15 bg-ink-900/30 p-3">
             <label className="block">
               <span className="console-label mb-1 block">服务地址（OpenAI 兼容）</span>
               <input
                 className="input-xuan w-full font-mono text-sm"
                 value={settings.baseUrl}
                 onChange={(e) => update({ baseUrl: e.target.value })}
-                placeholder="http://localhost:8000"
+                placeholder={def.baseUrl || "http://localhost:8000"}
               />
+              <p className="mt-1 text-[10px] text-paper-500">默认 {def.baseUrl}，可按需修改</p>
             </label>
             <label className="block">
-              <span className="console-label mb-1 block">API Key（可留空）</span>
+              <span className="console-label mb-1 block">API Key{provider === "kilo" ? "（可留空）" : ""}</span>
               <input
                 type="password"
                 className="input-xuan w-full font-mono text-sm"
@@ -311,7 +325,10 @@ function AiSection() {
               />
             </label>
             <div>
-              <span className="console-label mb-1 block">模型</span>
+              <div className="console-label mb-1 flex items-center justify-between">
+                <span>模型</span>
+                {models.length > 0 && <span className="text-[10px] text-jade-400">已拉取 {models.length} 个</span>}
+              </div>
               {models.length > 0 ? (
                 <select
                   className="input-xuan w-full"
@@ -327,11 +344,11 @@ function AiSection() {
                   className="input-xuan w-full font-mono text-sm"
                   value={settings.model}
                   onChange={(e) => update({ model: e.target.value })}
-                  placeholder="qwen-8b"
+                  placeholder={provider === "kilo" ? "x-ai/grok-code-fast-1:optimized:free" : provider === "kimi" ? "kimi-ai-chat" : "qwen-8b"}
                 />
               )}
             </div>
-          </>
+          </div>
         )}
 
         <div className="flex items-center gap-3 pt-2">
@@ -346,7 +363,8 @@ function AiSection() {
           )}
           {result === "fail" && (
             <span className="text-xs text-cinnabar-400">
-              连接失败{settings.mode === "builtin" ? "——请检查网络" : "——请确认服务已启动"}
+              连接失败
+              {provider === "builtin" ? "——请检查网络" : "——请确认本地服务已启动且 baseUrl 正确"}
             </span>
           )}
           <button type="button" onClick={save} className="btn-gold ml-auto !px-5 text-sm">保存</button>
