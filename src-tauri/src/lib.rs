@@ -1126,20 +1126,23 @@ fn shard_paths() -> Vec<(String, String)> {
 
 /// 打开一个连接，并把所有分片 ATTACH 为 shard_xxx 别名（按需）
 fn open_with_shards() -> Result<Connection, String> {
-    // 先打开主分片（如果存在），否则用单文件
-    let main = std::path::Path::new("public/naming-data/shards/sources-shijing.sqlite3");
-    let main_path = if main.exists() {
-        main.to_string_lossy().to_string()
+    // 优先从环境变量 / resolve_naming_data_dir 找到分片目录
+    let shards_dir = resolve_naming_data_dir();
+    let main_path = if let Some(dir) = &shards_dir {
+        let p = dir.join("sources-shijing.sqlite3");
+        if p.exists() {
+            p.to_string_lossy().to_string()
+        } else {
+            stroke_db_path()
+        }
     } else {
         stroke_db_path()
     };
     let conn = Connection::open(&main_path).map_err(|e| format!("打开主分片失败：{e}"))?;
     let shards = shard_paths();
     for (alias, path) in &shards {
-        // ATTACH 别名以防与其他表冲突
         if path == &main_path { continue; }
         let stmt = format!("ATTACH DATABASE '{}' AS {}", path.replace('\'', "''"), alias);
-        // ATTACH 时使用 ? 绑定路径以避免特殊字符问题
         let _ = conn.execute(&stmt, []);
     }
     Ok(conn)
