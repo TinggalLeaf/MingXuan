@@ -13,6 +13,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write # release-please 步骤里用 gh workflow run 派发 tag 构建需要
 
 concurrency:
   group: release-${{ github.ref }}
