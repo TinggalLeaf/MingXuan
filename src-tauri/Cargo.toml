@@ -30,3 +30,5 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 regex = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+parking_lot = "0.12"

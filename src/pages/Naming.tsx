@@ -5,13 +5,13 @@
  * 全部数据本地（unihan-strokes.json + chinese_names.dat + 内嵌古诗文短语库）。
  */
 
-import { useMemo, useState } from "react";
-import { Search, Sparkles, RefreshCw, AlertCircle, Download, ChevronRight } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Search, Sparkles, RefreshCw, AlertCircle, Download, ChevronRight, Database } from "lucide-react";
 import {
   generateNames,
   lookupName,
+  calcWuge,
   SOURCE_LABELS,
-  NAMING_SOURCES,
   type NameCandidate,
   type SourceId,
   type WugeResult,
@@ -27,7 +27,7 @@ const SOURCE_OPTIONS: Array<{ id: SourceId | "all"; label: string; desc: string 
   { id: "tangshi", label: "唐诗", desc: "雍容气象" },
   { id: "songshi", label: "宋诗", desc: "理趣深远" },
   { id: "songci", label: "宋词", desc: "婉约清扬" },
-  { id: "common", label: "常见姓名", desc: "基于 Chinese Names Corpus 75K 真实姓名" },
+  { id: "common", label: "常见姓名", desc: "基于 Chinese Names Corpus 真实姓名" },
 ];
 
 const GRID_COLOR: Record<string, string> = {
@@ -62,13 +62,27 @@ export default function Naming() {
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<WugeResult | null>(null);
   const [detailInput, setDetailInput] = useState("");
+  const [dbInfo, setDbInfo] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  // 启动时检测后端 DB 是否可用
+  useEffect(() => {
+    (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("name_lookup", { name: "林蛋大" });
+        setDbInfo({ ok: true, msg: "已连接 pipiname.sqlite3" });
+      } catch (e) {
+        setDbInfo({ ok: false, msg: `未连接（${(e as Error).message}）。需在 Tauri 桌面端运行。` });
+      }
+    })();
+  }, []);
 
   const dislikeChars = useMemo(
     () => Array.from(new Set(dislike.split("").filter((c) => c.trim()))).filter((c) => /[一-鿿]/.test(c)),
     [dislike],
   );
 
-  function doGenerate() {
+  async function doGenerate() {
     if (!surname.trim() || surname.length !== 1) {
       setError("请输入单字姓氏（1 个汉字）");
       return;
@@ -81,38 +95,51 @@ export default function Naming() {
     setGenerating(true);
     setResults([]);
     setSelected(null);
-    setTimeout(() => {
-      try {
-        const list = generateNames({
-          surname,
-          source,
-          gender,
-          allowGeneral,
-          dislikeChars: dislikeChars,
-          minStroke,
-          maxStroke,
-          limit,
-        });
-        setResults(list);
-        if (!list.length) {
-          setError("没有匹配的候选名。试着放宽笔画范围或允许中吉。");
-        }
-      } catch (e) {
-        setError(`生成失败：${(e as Error).message}`);
-      } finally {
-        setGenerating(false);
+    try {
+      const list = await generateNames({
+        surname,
+        source,
+        gender,
+        allowGeneral,
+        dislikeChars: dislikeChars,
+        minStroke,
+        maxStroke,
+        limit,
+      });
+      setResults(list);
+      if (!list.length) {
+        setError("没有匹配的候选名。试着放宽笔画范围或允许中吉。");
       }
-    }, 50);
+    } catch (e) {
+      setError(`生成失败：${(e as Error).message}`);
+    } finally {
+      setGenerating(false);
+    }
   }
 
-  function checkExistingName() {
+  async function checkExistingName() {
     if (detailInput.length !== 3) {
       setError("请输入 3 个汉字（单姓 + 双字名）");
       return;
     }
     setError("");
     try {
-      const r = lookupName(detailInput);
+      let r: WugeResult;
+      try {
+        r = await lookupName(detailInput);
+      } catch {
+        // 后端不可用时，前端用 calcWuge 兜底（仅三才五格，无出处）
+        const w = calcWuge(detailInput);
+        r = {
+          name: w.name,
+          strokes: w.strokes,
+          tian: w.tian, ren: w.ren, di: w.di, zong: w.zong, wai: w.wai,
+          sancai: w.sancai,
+          sancaiKind: w.sancaiKind,
+          validGender: null,
+          resources: [],
+        };
+      }
       setSelected(r);
     } catch (e) {
       setError(e instanceof Error ? e.message : "查询失败");
@@ -146,8 +173,14 @@ export default function Naming() {
         </h1>
         <p className="mt-2 text-sm text-paper-400">
           基于 PiPiName 算法（<b className="text-gold-300">单姓双字名</b> + 三才五格大吉筛选 + 古诗文/常见姓名库）。
-          所有数据均本地：笔画（Unihan20992 字符）、姓名（75K 真实姓名）、古诗文短语（精选自诗经楚辞论语周易唐诗宋诗宋词）。
+          全量数据已构建为本地 SQLite 索引（<code className="rounded bg-ink-800 px-1">pipiname.sqlite3</code>）：
+          48 万句诗经/楚辞/论语/周易/唐诗/宋诗/宋词 + 29 万真实姓名 + 82 万候选名。
         </p>
+        {dbInfo && (
+          <p className={`mt-1 text-[11px] ${dbInfo.ok ? "text-jade-400" : "text-cinnabar-400"}`}>
+            <Database className="mr-1 inline h-3 w-3" />{dbInfo.msg}
+          </p>
+        )}
       </header>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_400px]">
@@ -294,7 +327,7 @@ export default function Naming() {
                   <li key={i}>
                     <button
                       type="button"
-                      onClick={() => setSelected(lookupName(r.fullName))}
+                      onClick={() => lookupName(r.fullName).then(setSelected).catch((e) => setError(e.message))}
                       className="group flex w-full items-start gap-3 rounded-lg border border-gold-500/15 bg-ink-900/40 p-3 text-left transition-all hover:border-gold-500/50 hover:bg-ink-800/60"
                     >
                       <div className="text-2xl font-bold text-gold-300">{r.fullName}</div>
@@ -379,22 +412,25 @@ export default function Naming() {
                   <div>
                     <div className="console-label mb-1.5">SOURCE · 名源</div>
                     <ul className="space-y-1.5">
-                      {selected.resources.map((r, i) => (
-                        <li key={i} className="rounded border border-gold-500/15 bg-ink-900/30 p-2 text-xs">
-                          <div className="flex items-center gap-1.5">
-                            <span className="rounded bg-gold-500/15 px-1.5 py-0.5 text-gold-300">
-                              {r.sourceLabel}
-                            </span>
-                            {r.title && <span className="text-paper-300">{r.title}</span>}
-                          </div>
-                          {r.author && <div className="mt-0.5 text-paper-400">{r.author}</div>}
-                          {r.sentence && (
-                            <blockquote className="mt-1 border-l-2 border-gold-500/30 pl-2 text-paper-200">
-                              {r.sentence}
-                            </blockquote>
-                          )}
-                        </li>
-                      ))}
+                      {selected.resources.map((r, i) => {
+                        const sid = r.source_type as SourceId;
+                        return (
+                          <li key={i} className="rounded border border-gold-500/15 bg-ink-900/30 p-2 text-xs">
+                            <div className="flex items-center gap-1.5">
+                              <span className="rounded bg-gold-500/15 px-1.5 py-0.5 text-gold-300">
+                                {SOURCE_LABELS[sid] ?? r.source_type}
+                              </span>
+                              {r.title && <span className="text-paper-300">{r.title}</span>}
+                            </div>
+                            {r.author && <div className="mt-0.5 text-paper-400">{r.author}</div>}
+                            {r.sentence && (
+                              <blockquote className="mt-1 border-l-2 border-gold-500/30 pl-2 text-paper-200">
+                                {r.sentence}
+                              </blockquote>
+                            )}
+                          </li>
+                        );
+                      })}
                     </ul>
                   </div>
                 )}
@@ -409,16 +445,33 @@ export default function Naming() {
           {/* 词库统计 */}
           <div className="card-xuan mt-4 p-5">
             <h3 className="console-title mb-2 text-sm">
-              <span className="seq">·</span>本地词库
+              <span className="seq">·</span>本地词库（pipiname.sqlite3）
             </h3>
             <div className="space-y-1 text-xs text-paper-300">
-              {(Object.keys(NAMING_SOURCES) as Array<keyof typeof NAMING_SOURCES>).map((k) => (
-                <div key={k} className="flex items-center justify-between">
-                  <span>{SOURCE_LABELS[k]}</span>
-                  <span className="text-paper-500">{NAMING_SOURCES[k].length} 条</span>
-                </div>
-              ))}
+              <div className="flex items-center justify-between">
+                <span>诗经/楚辞/论语/周易</span>
+                <span className="text-paper-500">~6,000 句</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>唐诗</span>
+                <span className="text-paper-500">~138,000 句</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>宋诗</span>
+                <span className="text-paper-500">~266,000 句</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>宋词</span>
+                <span className="text-paper-500">~73,000 句</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>常见姓名库</span>
+                <span className="text-paper-500">~291,000 真实姓名</span>
+              </div>
             </div>
+            <p className="mt-2 text-[10px] text-paper-500">
+              数据源自 chinese-poetry（CC-BY-SA）与 wainshine/Chinese-Names-Corpus
+            </p>
           </div>
         </aside>
       </div>
