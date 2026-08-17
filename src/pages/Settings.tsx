@@ -553,39 +553,57 @@ function FontSection({
   const [customDraft, setCustomDraft] = useState(settings.customFontName);
   useEffect(() => setCustomDraft(settings.customFontName), [settings.customFontName]);
 
+  // 启动时枚举系统全部已安装字体
+  const [systemFonts, setSystemFonts] = useState<string[]>([]);
+  const [enumerating, setEnumerating] = useState(false);
+  useEffect(() => {
+    setEnumerating(true);
+    import("@/lib/settings").then(({ listAvailableFonts }) => {
+      try {
+        const list = listAvailableFonts();
+        setSystemFonts(list);
+      } catch (e) {
+        console.warn("枚举系统字体失败：", e);
+      } finally {
+        setEnumerating(false);
+      }
+    });
+  }, []);
+
   const allFonts = useMemo(() => {
     const set = new Set<string>(COMMON_FONT_NAMES);
+    systemFonts.forEach((f) => set.add(f));
     return Array.from(set);
-  }, []);
+  }, [systemFonts]);
 
   return (
     <SectionCard
       title="字体设置"
-      desc="支持任意系统已安装字体。下拉选择预设，或在「自定义字体」中输入任意字体名（按系统已安装为准）。已开启字体平滑与抗锯齿。"
+      desc="启动时自动枚举系统已安装的全部字体（Canvas 测宽法），下拉直接选；亦可手动输入任意字体名。已开启字体平滑与抗锯齿。"
     >
       <div className="space-y-4">
         <div>
-          <div className="console-label mb-2">FONT · 字体族</div>
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-            {FONT_PRESETS.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => update({ fontFamily: p.id })}
-                className={`tab-chip text-center text-sm ${settings.fontFamily === p.id ? "is-active" : ""}`}
-                style={{ fontFamily: p.stack }}
-              >
-                {p.label}
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => update({ fontFamily: "custom" })}
-              className={`tab-chip text-center text-sm ${settings.fontFamily === "custom" ? "is-active" : ""}`}
-            >
-              自定义…
-            </button>
+          <div className="console-label mb-2 flex items-center justify-between">
+            <span>FONT · 字体族（{allFonts.length} 个可用）</span>
+            {enumerating && <span className="text-[10px] text-paper-500">枚举中…</span>}
           </div>
+          <select
+            className="input-xuan w-full"
+            value={settings.fontFamily === "custom" ? "__custom__" : (settings.fontFamily || "")}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "__custom__") update({ fontFamily: "custom" });
+              else update({ fontFamily: v });
+            }}
+          >
+            <option value="">（跟随系统默认）</option>
+            {allFonts.map((f) => (
+              <option key={f} value={f} style={{ fontFamily: f }}>
+                {f}
+              </option>
+            ))}
+            <option value="__custom__">— 自定义… —</option>
+          </select>
         </div>
 
         {settings.fontFamily === "custom" ? (
@@ -612,8 +630,8 @@ function FontSection({
             </datalist>
             <p className="mt-2 text-[11px] leading-relaxed text-paper-500">
               输入系统已安装的任意字体名（如 Windows 的 <b>Microsoft YaHei</b>、
-              Mac 的 <b>PingFang SC</b>、Linux 的 <b>WenQuanYi Zen Hei</b>，或
-              自己安装的设计字体）。应用后下方预览立即生效。
+              Mac 的 <b>PingFang SC</b>、Linux 的 <b>WenQuanYi Zen Hei</b>）。
+              应用后下方预览立即生效。
             </p>
           </div>
         ) : null}

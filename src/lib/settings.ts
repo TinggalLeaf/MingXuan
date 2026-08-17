@@ -8,13 +8,75 @@
 
 export type ThemeMode = "dark" | "light" | "system";
 
-export type FontFamily =
-  | "song" // 思源宋体（默认中文衬线）
-  | "kai" // 楷体（更适合玄学氛围）
-  | "hei" // 黑体（更清晰）
-  | "yuan" // 圆体（柔和）
-  | "system" // 跟随系统
-  | "custom"; // 用户自定义（任意系统已安装字体）
+export type FontFamily = "system" | "custom" | string; // "system" 跟随系统，""=使用 FontFaceSet，custom=用户指定字体名
+
+/** 启动时尝试枚举系统已安装的字体（Canvas 测宽法） */
+let _systemFonts: string[] | null = null;
+function enumerateSystemFonts(): string[] {
+  if (_systemFonts) return _systemFonts;
+  if (typeof document === "undefined") return [];
+  // 通用字体探测：先在 5 个基准字体上测量字符串宽度，再用 12 万候选字体逐一比对
+  const baseFonts = [
+    "monospace", "sans-serif", "serif", "cursive", "fantasy",
+    "system-ui", "-apple-system", "Segoe UI", "Roboto", "Helvetica Neue",
+    "Microsoft YaHei", "PingFang SC", "Source Han Sans SC",
+  ];
+  const testStr = "明玄QiPi—測試 0123456789";
+  const span = document.createElement("span");
+  span.style.fontSize = "72px";
+  span.style.position = "absolute";
+  span.style.left = "-9999px";
+  span.style.visibility = "hidden";
+  span.style.whiteSpace = "nowrap";
+  span.textContent = testStr;
+  document.body.appendChild(span);
+  const measure = (family: string) => {
+    span.style.fontFamily = family;
+    return span.getBoundingClientRect().width;
+  };
+  const baseWidths = baseFonts.map((f) => measure(`"${f}"`));
+  // 候选字体集：常用 Windows / Mac / Linux + 通用
+  const candidates = [
+    // 思源 / 通用 CJK
+    "Noto Serif SC", "Noto Sans SC", "Source Han Serif SC", "Source Han Sans SC",
+    "Source Han Serif CN", "Source Han Sans CN",
+    // 楷体 / 宋体 / 仿宋
+    "KaiTi", "STKaiti", "Kaiti SC", "STHeiti", "STSong", "STFangsong",
+    "FangSong", "FangSong_GB2312", "SimSun", "SimHei", "SimKai", "SimFang", "SimLi", "SimYou",
+    "NSimSun", "NSimHei", "Microsoft YaHei", "Microsoft JhengHei", "Microsoft YaHei UI",
+    "PingFang SC", "PingFang TC", "Hiragino Sans GB", "Heiti SC", "STSongti-SC-Regular", "STSongti-SC-Bold",
+    "Yuanti SC", "Songti SC", "WenQuanYi Zen Hei", "WenQuanYi Micro Hei", "Noto Sans CJK SC", "Noto Serif CJK SC",
+    "FZShuSong-Z01", "FZHei-B01", "LXGW WenKai", "LXGW NeoXiHei",
+    // 英文
+    "Times New Roman", "Arial", "Arial Black", "Helvetica", "Helvetica Neue", "Verdana",
+    "Georgia", "Courier New", "Courier", "Palatino", "Garamond", "Bookman",
+    "Comic Sans MS", "Trebuchet MS", "Impact", "Tahoma", "Lucida Console", "Lucida Sans Unicode",
+    "Cambria", "Calibri", "Segoe UI", "Candara", "Consolas",
+    // Mac
+    "Avenir", "Avenir Next", "Charter", "Optima", "Didot", "Hoefler Text", "Snell Roundhand",
+    // Linux
+    "DejaVu Sans", "DejaVu Serif", "Liberation Sans", "Liberation Serif", "Ubuntu",
+    // 等宽
+    "Menlo", "Monaco", "Source Code Pro", "Fira Code", "JetBrains Mono", "Roboto Mono",
+    "Consolas", "Inconsolata",
+  ];
+  const out: string[] = [];
+  for (const f of candidates) {
+    const w = measure(`"${f}", monospace`);
+    if (!baseWidths.some((bw) => Math.abs(bw - w) < 0.5)) {
+      out.push(f);
+    }
+  }
+  document.body.removeChild(span);
+  _systemFonts = out;
+  return out;
+}
+
+/** 暴露给前端的字体选项：用户所有系统字体 + 4 个常用预设 + 自定义 */
+export function listAvailableFonts(): string[] {
+  const sys = enumerateSystemFonts();
+  return sys;
+}
 
 /**
  * 常用系统字体预设（中英各 ~15 种），覆盖 Win / Mac / 常见 Linux 桌面。

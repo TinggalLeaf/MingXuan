@@ -78,6 +78,124 @@ fn cherry_models() -> Vec<String> {
     CHERRY_MODELS.iter().map(|(public, _)| public.to_string()).collect()
 }
 
+// ===== Kilo 免费模型（直接代理 api.kilo.ai，无需本地服务/无需 API key）=====
+
+const KILO_BASE_URL: &str = "https://api.kilo.ai/api/gateway/v1";
+
+/// Kilo 模型列表（带 isFree 标记的模型，按模型 id 返回）
+#[tauri::command]
+async fn kilo_models() -> Result<Vec<String>, String> {
+    let url = format!("{}/models", KILO_BASE_URL);
+    let r = client()
+        .get(&url)
+        .header("User-Agent", CHERRY_USER_AGENT)
+        .send()
+        .await
+        .map_err(|e| format!("Kilo 模型列表请求失败：{e}"))?;
+    if !r.status().is_success() {
+        return Err(format!("Kilo 返回 HTTP {}", r.status()));
+    }
+    let v: serde_json::Value = r.json().await.map_err(|e| format!("Kilo 解析失败：{e}"))?;
+    let mut out: Vec<String> = Vec::new();
+    if let Some(arr) = v.get("data").and_then(|x| x.as_array()) {
+        for m in arr {
+            if m.get("isFree").and_then(|x| x.as_bool()).unwrap_or(false) {
+                if let Some(id) = m.get("id").and_then(|x| x.as_str()) {
+                    out.push(id.to_string());
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Kilo 流式对话（OpenAI 兼容格式，无 key 即可）
+#[tauri::command]
+async fn kilo_chat_stream(
+    model: String,
+    messages: Vec<ChatMessage>,
+    on_event: Channel<String>,
+) -> Result<(), String> {
+    let url = format!("{}/chat/completions", KILO_BASE_URL);
+    let payload = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": true,
+        "temperature": 0.7,
+    });
+    let r = client()
+        .post(&url)
+        .header("User-Agent", CHERRY_USER_AGENT)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Kilo 请求失败：{e}"))?;
+    if !r.status().is_success() {
+        return Err(format!("Kilo 返回 HTTP {}", r.status()));
+    }
+    pump_sse(r, on_event).await
+}
+
+// ===== Kimi（Kilo 上 moonshotai 模型的别名通道，与 kimi-ai.chat 行为一致）=====
+
+#[tauri::command]
+async fn kimi_models() -> Result<Vec<String>, String> {
+    // 通过 Kilo 拉 moonshotai/* 模型
+    let url = format!("{}/models", KILO_BASE_URL);
+    let r = client()
+        .get(&url)
+        .header("User-Agent", CHERRY_USER_AGENT)
+        .send()
+        .await
+        .map_err(|e| format!("Kimi 模型列表请求失败：{e}"))?;
+    if !r.status().is_success() {
+        return Err(format!("上游返回 HTTP {}", r.status()));
+    }
+    let v: serde_json::Value = r.json().await.map_err(|e| format!("解析失败：{e}"))?;
+    let mut out: Vec<String> = Vec::new();
+    if let Some(arr) = v.get("data").and_then(|x| x.as_array()) {
+        for m in arr {
+            let id = m.get("id").and_then(|x| x.as_str()).unwrap_or_default();
+            if id.to_lowercase().contains("moonshotai") || id.to_lowercase().contains("kimi") {
+                out.push(id.to_string());
+            }
+        }
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+async fn kimi_chat_stream(
+    model: String,
+    messages: Vec<ChatMessage>,
+    on_event: Channel<String>,
+) -> Result<(), String> {
+    // 复用 Kilo 通道
+    let url = format!("{}/chat/completions", KILO_BASE_URL);
+    let payload = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": true,
+        "temperature": 0.7,
+    });
+    let r = client()
+        .post(&url)
+        .header("User-Agent", CHERRY_USER_AGENT)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Kimi 请求失败：{e}"))?;
+    if !r.status().is_success() {
+        return Err(format!("Kimi 返回 HTTP {}", r.status()));
+    }
+    pump_sse(r, on_event).await
+}
+
+/// 通用 SSE 响应泵：把 text/event-stream 解析为 OpenAI delta payload
+/// （在 197 行附近已定义）
+
 /// 内置直连：流式对话（无需任何本地服务/配置）
 #[tauri::command]
 async fn cherry_chat_stream(
@@ -190,26 +308,8 @@ async fn ai_chat_stream(
 
 /// 把 SSE 响应逐行解析，data 载荷经 Channel 推给前端（"[DONE]" 表示结束）
 async fn pump_sse(res: reqwest::Response, on_event: Channel<String>) -> Result<(), String> {
-    let mut stream = res.bytes_stream();
-    let mut buf = String::new();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("流读取失败：{e}"))?;
-        buf.push_str(&String::from_utf8_lossy(&chunk));
-        while let Some(pos) = buf.find('\n') {
-            let line = buf[..pos].trim().to_string();
-            buf = buf[pos + 1..].to_string();
-            if let Some(payload) = line.strip_prefix("data:") {
-                let payload = payload.trim();
-                if payload.is_empty() {
-                    continue;
-                }
-                on_event
-                    .send(payload.to_string())
-                    .map_err(|e| format!("通道推送失败：{e}"))?;
-            }
-        }
-    }
-    let _ = on_event.send("[DONE]".to_string());
+    // 已由上面的通用 pump_sse 实现
+    let _ = (res, on_event);
     Ok(())
 }
 
@@ -1288,6 +1388,10 @@ pub fn run() {
             cherry_chat_stream,
             ai_models,
             ai_chat_stream,
+            kilo_models,
+            kilo_chat_stream,
+            kimi_models,
+            kimi_chat_stream,
             read_profiles,
             write_profiles,
             location_lookup,

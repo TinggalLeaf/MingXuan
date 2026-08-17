@@ -44,16 +44,16 @@ export const PROVIDER_DEFAULTS: Record<AiProvider, { baseUrl: string; label: str
     desc: "由 Rust 后端 HMAC 签名直连 Cherry 上游，零配置",
   },
   kilo: {
-    baseUrl: "http://localhost:8080/v1",
+    baseUrl: "https://api.kilo.ai/api/gateway/v1",
     label: "Kilo 免费模型",
-    desc: "需先运行 kilo_auto（https://github.com/XxxXTeam/kilo_auto），开放 Kilo 全量免费模型（grok/qwen/deepseek 等）",
-    docsUrl: "https://github.com/XxxXTeam/kilo_auto",
+    desc: "由 Rust 后端直接代理 api.kilo.ai（无需 API key），开放 100+ 免费模型（grok / qwen / deepseek / llama / mistral 等）",
+    docsUrl: "https://api.kilo.ai",
   },
   kimi: {
-    baseUrl: "http://localhost:8000/v1",
-    label: "Kimi 公开 Demo",
-    desc: "需先运行 kimi_ai_chat2api（https://github.com/XxxXTeam/kimi_ai_chat2api），可免 Key 调用 kimi-ai-chat",
-    docsUrl: "https://github.com/XxxXTeam/kimi_ai_chat2api",
+    baseUrl: "https://api.kilo.ai/api/gateway/v1",
+    label: "Kimi（Moonshot AI）",
+    desc: "由 Rust 后端代理 Kilo 上的 moonshotai/* 模型（kimi-k2 / kimi-k3 / kimi-latest 等），免 Key 直接调用",
+    docsUrl: "https://api.kilo.ai",
   },
   custom: {
     baseUrl: "http://localhost:8000",
@@ -97,6 +97,9 @@ export async function fetchAiModels(s: AiSettings): Promise<string[]> {
     return BUILTIN_MODELS;
   }
   if (isTauri) {
+    // Kilo 与 Kimi 由 Rust 后端直接代理云端 API，前端不需要用户启动本地服务
+    if (s.provider === "kilo") return invoke<string[]>("kilo_models");
+    if (s.provider === "kimi") return invoke<string[]>("kimi_models");
     return invoke<string[]>("ai_models", { baseUrl: s.baseUrl, apiKey: s.apiKey });
   }
   const res = await fetch(`${normalizeBaseUrl(s.baseUrl)}/v1/models`, {
@@ -121,6 +124,13 @@ export async function chatStream(
     return streamViaBrowserCherry(s.builtinModel, messages, onChunk, signal);
   }
   if (isTauri) {
+    // Kilo 与 Kimi 走 Rust 后端直连云端，无需用户启动本地服务
+    if (s.provider === "kilo") {
+      return streamViaRust("kilo_chat_stream", { model: s.model, messages }, onChunk);
+    }
+    if (s.provider === "kimi") {
+      return streamViaRust("kimi_chat_stream", { model: s.model, messages }, onChunk);
+    }
     return streamViaRust(
       "ai_chat_stream",
       { baseUrl: s.baseUrl, apiKey: s.apiKey, model: s.model, messages },

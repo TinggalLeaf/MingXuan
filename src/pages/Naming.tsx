@@ -69,10 +69,12 @@ export default function Naming() {
     (async () => {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("name_lookup", { name: "林蛋大" });
-        setDbInfo({ ok: true, msg: "已连接 pipiname.sqlite3" });
-      } catch (e) {
-        setDbInfo({ ok: false, msg: `未连接（${(e as Error).message}）。需在 Tauri 桌面端运行。` });
+        const r = await invoke<any>("name_lookup", { name: "林蛋大" });
+        setDbInfo({ ok: true, msg: `已连接 SQLite（${r?.sancai ?? ""} 三才）` });
+      } catch (e: any) {
+        // 兼容 Rust 错误（字符串）与 JS Error
+        const msg = (typeof e === "string" ? e : e?.message) ?? JSON.stringify(e);
+        setDbInfo({ ok: false, msg: `未连接（${msg}）` });
       }
     })();
   }, []);
