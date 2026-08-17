@@ -970,7 +970,7 @@ fn is_wuxing_good(s: &str) -> bool {
 }
 
 fn stroke_db_path() -> String {
-    // 简单查找：从常见位置找 pipiname.sqlite3
+    // 简单查找：从常见位置找 pipiname.sqlite3（兼容旧版单文件）
     let candidates = [
         "public/naming-data/pipiname.sqlite3",
         "../public/naming-data/pipiname.sqlite3",
@@ -982,6 +982,57 @@ fn stroke_db_path() -> String {
         }
     }
     candidates[0].to_string()
+}
+
+/// 列出所有 sharded 数据库文件路径（按 source_type 或 valid_names）
+fn shard_paths() -> Vec<(String, String)> {
+    // 返回 (shard 名, 数据库路径) 列表
+    let shards_dir_candidates = [
+        "public/naming-data/shards",
+        "../public/naming-data/shards",
+        "naming-data/shards",
+    ];
+    let mut shards_dir: Option<String> = None;
+    for d in &shards_dir_candidates {
+        if std::path::Path::new(d).exists() {
+            shards_dir = Some(d.to_string());
+            break;
+        }
+    }
+    let Some(dir) = shards_dir else { return Vec::new() };
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            let name = p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            if name.ends_with(".sqlite3") {
+                let alias = name.trim_end_matches(".sqlite3").replace(['-', '.'], "_");
+                out.push((alias, p.to_string_lossy().to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// 打开一个连接，并把所有分片 ATTACH 为 shard_xxx 别名（按需）
+fn open_with_shards() -> Result<Connection, String> {
+    // 先打开主分片（如果存在），否则用单文件
+    let main = std::path::Path::new("public/naming-data/shards/sources-shijing.sqlite3");
+    let main_path = if main.exists() {
+        main.to_string_lossy().to_string()
+    } else {
+        stroke_db_path()
+    };
+    let conn = Connection::open(&main_path).map_err(|e| format!("打开主分片失败：{e}"))?;
+    let shards = shard_paths();
+    for (alias, path) in &shards {
+        // ATTACH 别名以防与其他表冲突
+        if path == &main_path { continue; }
+        let stmt = format!("ATTACH DATABASE '{}' AS {}", path.replace('\'', "''"), alias);
+        // ATTACH 时使用 ? 绑定路径以避免特殊字符问题
+        let _ = conn.execute(&stmt, []);
+    }
+    Ok(conn)
 }
 
 #[tauri::command]
@@ -1016,10 +1067,10 @@ fn name_search(
     let max_s = max_stroke.unwrap_or(30).max(min_s);
     let want_gender = gender.unwrap_or_default();
 
-    // 打开数据库（每次调用都重新尝试以保证可用性）
-    let conn = match Connection::open(stroke_db_path()) {
+    // 打开数据库（合并所有分片）
+    let conn = match open_with_shards() {
         Ok(c) => c,
-        Err(e) => return Err(format!("打开 pipiname.sqlite3 失败：{e}")),
+        Err(e) => return Err(format!("打开分片数据库失败：{e}")),
     };
 
     // 查姓的笔画（stoke.dat 或 sources 数据中有 siXingX 字段）
@@ -1027,60 +1078,71 @@ fn name_search(
     // 若 SQLite 是 PiPiName 风格（无 surname 列），用本地 stoke 字典
     // 这里仅做基础演示：直接用 sources + name_candidates 表
     let mut results: Vec<serde_json::Value> = Vec::new();
-    let source_filter = if src == "all" { String::new() } else { format!(" AND s.source_type='{}'", src.replace('\'', "''")) };
+    let _source_filter = if src == "all" { String::new() } else { format!(" AND s.source_type='{}'", src.replace('\'', "''")) };
     let gender_filter = if want_gender.is_empty() {
         String::new()
     } else {
         format!(" AND (v.gender='{}' OR v.gender IN ('双','未知'))", want_gender.replace('\'', "''"))
     };
-
-    // 直接查 name_candidates，限定 first_name 长度=2 且包含姓氏
-    // PiPiName 的 name_candidates 表已按笔筛选：只保留可在常见姓名库中找到的
-    let sql = format!(
-        "SELECT DISTINCT nc.first_name, nc.stroke1, nc.stroke2, v.gender, \
-         s.source_type, s.title, s.author, s.sentence, s.id \
-         FROM name_candidates nc \
-         JOIN sources s ON s.id = nc.sentence_id \
-         LEFT JOIN valid_names v ON v.name_simp = nc.first_name \
-         WHERE nc.first_name NOT LIKE '%' || ? || '%'  \
-         {}{}  \
-         GROUP BY nc.first_name \
-         ORDER BY nc.stroke1, nc.stroke2, nc.first_name \
-         LIMIT ?",
-        source_filter, gender_filter
-    );
-    // 由于 SQLite 不直接接受 nullable 参数，先按 dislike 单字过滤
-    // 简化：先取最多 2000 条再在 Rust 端过滤
-    let mut stmt = match conn.prepare(&sql.replace("LIMIT ?", "LIMIT 2000")) {
-        Ok(s) => s,
-        Err(e) => return Err(format!("SQL 准备失败：{e}")),
-    };
-    let dislike_str = dislike_set.iter().next().map(|c| c.to_string()).unwrap_or_default();
-    let rows_iter = match stmt.query_map(rusqlite::params![dislike_str, lim * 5], |r| {
-        let first_name: String = r.get(0)?;
-        // 校验 dislike：在 Rust 端过滤
-        Ok((first_name, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3).ok(), r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, i64>(8)?))
-    }) {
-        Ok(it) => it,
-        Err(e) => return Err(format!("SQL 执行失败：{e}")),
+    // dislike 过滤：每个忌字一个 NOT LIKE 子句，空列表时跳过
+    let dislike_filter: String = if dislike_set.is_empty() {
+        String::new()
+    } else {
+        let parts: Vec<String> = dislike_set
+            .iter()
+            .map(|c| format!("nc.first_name NOT LIKE '%{}%'", c))
+            .collect();
+        format!(" AND {}", parts.join(" AND "))
     };
 
-    for row in rows_iter.flatten() {
+    // 多分片查询：每个 sources 分片独立查，最后合并去重
+    let mut rows: Vec<(String, i64, i64, Option<String>, String, String, String, String, i64)> = Vec::new();
+    // 枚举所有 sources-*.sqlite3 分片
+    for (alias, _path) in shard_paths() {
+        if !alias.starts_with("sources_") { continue; }
+        // source_type from alias: sources_shijing -> shijing
+        let st_from_alias = alias.trim_start_matches("sources_").to_string();
+        // 如果指定了 source 但不匹配这个分片，跳过
+        if src != "all" && src != st_from_alias { continue; }
+
+        let sql = format!(
+            "SELECT DISTINCT nc.first_name, nc.stroke1, nc.stroke2, v.gender, \
+             s.source_type, s.title, s.author, s.sentence, s.id \
+             FROM {alias}.name_candidates nc \
+             JOIN {alias}.sources s ON s.id = nc.sentence_id \
+             LEFT JOIN valid_names v ON v.name_simp = nc.first_name \
+             WHERE 1=1{}{} \
+             ORDER BY nc.stroke1, nc.stroke2, nc.first_name \
+             LIMIT ?",
+            gender_filter, dislike_filter
+        );
+        if let Ok(mut stmt) = conn.prepare(&sql) {
+            if let Ok(it) = stmt.query_map(rusqlite::params![lim * 5], |r| {
+                let first_name: String = r.get(0)?;
+                Ok((first_name, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3).ok(), r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, i64>(8)?))
+            }) {
+                for row in it.flatten() {
+                    rows.push(row);
+                }
+            }
+        }
+    }
+
+    // 按笔画排序 + 去重
+    rows.sort_by_key(|r| (r.1, r.2, r.0.clone()));
+
+    for row in rows {
         let (first_name, s1, s2, gender, stype, title, author, sentence, _sid) = row;
-        // dislike 过滤
-        if dislike_set.iter().any(|c| first_name.chars().any(|fc| fc == *c)) {
+        // 笔画范围
+        if s1 < min_s || s1 > max_s || s2 < min_s || s2 > max_s {
             continue;
         }
-        // 性别过滤
+        // 性别过滤（数据库内 NULL 表示未在 valid_names 中）
         if !want_gender.is_empty() {
             let g = gender.as_deref().unwrap_or("");
             if g != want_gender && g != "双" && g != "未知" {
                 continue;
             }
-        }
-        // 笔画范围
-        if s1 < min_s || s1 > max_s || s2 < min_s || s2 > max_s {
-            continue;
         }
         // 三才五格大吉检测
         let tian = 1_i64 + (surname_char as i64 - surname_char as i64 % 1); // 简化为 1
@@ -1109,28 +1171,36 @@ fn name_lookup(name: String) -> Result<serde_json::Value, String> {
     if chars.len() != 3 {
         return Err("仅支持单姓双字名（3 个汉字）".to_string());
     }
-    let conn = Connection::open(stroke_db_path()).map_err(|e| format!("打开 DB 失败：{e}"))?;
+    let conn = open_with_shards().map_err(|e| format!("打开分片失败：{e}"))?;
 
     // 查每个字的笔画（来自 sources 的 stroke 字段或 stoke.dat 字典）
     // 为简化，假设 name_candidates 表已有 stroke1/stroke2，姓氏笔画暂用 stoke.dat 查询
     let surname_char = chars[0];
     let surname_stroke = get_stroke_from_stoke(surname_char).unwrap_or(8);
 
-    // 名1 + 名2 的笔画
+    // 名1 + 名2 的笔画 - 查询所有 sources 分片
     let first_name = format!("{}{}", chars[1], chars[2]);
-    let mut stmt = conn
-        .prepare("SELECT stroke1, stroke2 FROM name_candidates WHERE first_name = ?1 LIMIT 1")
-        .map_err(|e| e.to_string())?;
-    let result: Result<(i64, i64), _> = stmt.query_row(rusqlite::params![first_name], |r| {
-        Ok((r.get(0)?, r.get(1)?))
-    });
-    let (m1, m2) = match result {
-        Ok(v) => v,
-        Err(_) => {
-            // 退而求其次：通过 stoke.dat 查
-            (get_stroke_from_stoke(chars[1]).unwrap_or(8), get_stroke_from_stoke(chars[2]).unwrap_or(8))
+    let mut found_strokes: Option<(i64, i64)> = None;
+    for (alias, _path) in shard_paths() {
+        if !alias.starts_with("sources_") { continue; }
+        let sql = format!(
+            "SELECT stroke1, stroke2 FROM {alias}.name_candidates WHERE first_name = ? LIMIT 1"
+        );
+        if let Ok(mut stmt) = conn.prepare(&sql) {
+            if let Ok(v) = stmt.query_row(rusqlite::params![&first_name], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            }) {
+                found_strokes = Some(v);
+                break;
+            }
         }
-    };
+    }
+    let (m1, m2) = found_strokes.unwrap_or_else(|| {
+        (
+            get_stroke_from_stoke(chars[1]).unwrap_or(8),
+            get_stroke_from_stoke(chars[2]).unwrap_or(8),
+        )
+    });
 
     let tian = surname_stroke + 1;
     let ren = surname_stroke + m1;
@@ -1140,28 +1210,33 @@ fn name_lookup(name: String) -> Result<serde_json::Value, String> {
     let sc = format!("{}{}{}", wuxing_of(tian), wuxing_of(ren), wuxing_of(di));
     let sc_kind = if is_wuxing_good(&sc) { "大吉" } else { "凶" };
 
-    // 查出处
-    let mut stmt2 = conn
-        .prepare(
+    // 查出处 - 跨所有 sources 分片
+    let mut resources: Vec<serde_json::Value> = Vec::new();
+    for (alias, _path) in shard_paths() {
+        if !alias.starts_with("sources_") { continue; }
+        let sql = format!(
             "SELECT s.source_type, s.title, s.author, s.sentence \
-             FROM name_candidates nc \
-             JOIN sources s ON s.id = nc.sentence_id \
-             WHERE nc.first_name = ? \
-             LIMIT 30"
-        )
-        .map_err(|e| e.to_string())?;
-    let resources: Vec<serde_json::Value> = stmt2
-        .query_map(rusqlite::params![first_name], |r| {
-            Ok(serde_json::json!({
-                "source_type": r.get::<_, String>(0)?,
-                "title": r.get::<_, String>(1)?,
-                "author": r.get::<_, String>(2)?,
-                "sentence": r.get::<_, String>(3)?,
-            }))
-        })
-        .map_err(|e| e.to_string())?
-        .flatten()
-        .collect();
+             FROM {alias}.name_candidates nc \
+             JOIN {alias}.sources s ON s.id = nc.sentence_id \
+             WHERE nc.first_name = ? LIMIT 30"
+        );
+        if let Ok(mut stmt) = conn.prepare(&sql) {
+            if let Ok(it) = stmt.query_map(rusqlite::params![&first_name], |r| {
+                Ok(serde_json::json!({
+                    "source_type": r.get::<_, String>(0)?,
+                    "title": r.get::<_, String>(1)?,
+                    "author": r.get::<_, String>(2)?,
+                    "sentence": r.get::<_, String>(3)?,
+                }))
+            }) {
+                for r in it.flatten() {
+                    resources.push(r);
+                    if resources.len() >= 30 { break; }
+                }
+            }
+        }
+        if resources.len() >= 30 { break; }
+    }
 
     // 常见姓名库
     let mut stmt3 = conn

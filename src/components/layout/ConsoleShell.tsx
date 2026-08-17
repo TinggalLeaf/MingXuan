@@ -54,11 +54,13 @@ const NAV_SECTIONS = [
   },
   {
     code: "SYS.07",
+    label: "起名",
+    items: [{ to: "/naming", label: "起名 · 三才五格" }],
+  },
+  {
+    code: "SYS.08",
     label: "系统",
-    items: [
-      { to: "/naming", label: "起名 · 三才五格" },
-      { to: "/settings", label: "设置中心" },
-    ],
+    items: [{ to: "/settings", label: "设置中心" }],
   },
 ];
 
@@ -191,7 +193,7 @@ export default function ConsoleShell() {
       {/* 底部状态条 */}
       <footer className="flex h-7 shrink-0 items-center justify-between border-t border-gold-500/15 bg-ink-950/90 px-4 font-mono text-[10px] tracking-wider text-paper-500">
         <span>
-          <span className="text-cyber-400">●</span> CORE ONLINE · 17 MODULES LOADED
+          <span className="text-cyber-400">●</span> CORE ONLINE · 18 MODULES LOADED
         </span>
         <span>仅供传统文化研究与娱乐参考</span>
       </footer>

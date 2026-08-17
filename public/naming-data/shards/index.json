@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "shards": [
+    "sources-chuci.sqlite3",
+    "sources-lunyu.sqlite3",
+    "sources-shijing.sqlite3",
+    "sources-songci.sqlite3",
+    "sources-songshi-1.sqlite3",
+    "sources-songshi-2.sqlite3",
+    "sources-songshi-3.sqlite3",
+    "sources-tangshi-1.sqlite3",
+    "sources-tangshi-2.sqlite3",
+    "sources-zhouyi.sqlite3",
+    "valid_names-1.sqlite3",
+    "valid_names-2.sqlite3"
+  ]
+}
