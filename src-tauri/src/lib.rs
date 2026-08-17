@@ -6,7 +6,7 @@
 //!    同时保留自定义 OpenAI 兼容服务转发（规避 Webview CORS）。
 //! 2. 命盘存档读写（应用数据目录下的 profiles.json）。
 
-use futures_util::StreamExt;
+// use futures_util::StreamExt; // 暂未使用（pump_sse 不再调用 .next()）
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -1164,9 +1164,9 @@ fn name_search(
         return Err("仅支持单姓（1 个汉字）".to_string());
     }
     let surname_char = surname_chars[0];
-    let surname_trad = surname_char.to_string(); // 简化：依赖 SQLite 内已存的繁简
+    let _surname_trad = surname_char.to_string(); // 简化：依赖 SQLite 内已存的繁简
     let src = source.unwrap_or_else(|| "all".to_string());
-    let allow_g = allow_general.unwrap_or(false);
+    let _allow_g = allow_general.unwrap_or(false);
     let mut dislike_set: std::collections::HashSet<char> = std::collections::HashSet::new();
     if let Some(s) = dislike {
         for c in s.chars() {
