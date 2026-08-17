@@ -1084,22 +1084,32 @@ fn stroke_db_path() -> String {
     candidates[0].to_string()
 }
 
-/// 列出所有 sharded 数据库文件路径（按 source_type 或 valid_names）
-fn shard_paths() -> Vec<(String, String)> {
-    // 返回 (shard 名, 数据库路径) 列表
-    let shards_dir_candidates = [
+/// 解析运行时数据目录：开发期 = CWD/public/naming-data/shards
+/// Tauri 打包后 = app_data_dir/naming-data/shards（由 ensure_naming_shards 复制）
+fn resolve_naming_data_dir() -> Option<std::path::PathBuf> {
+    let candidates = [
         "public/naming-data/shards",
         "../public/naming-data/shards",
         "naming-data/shards",
+        "data/naming-data/shards",
     ];
-    let mut shards_dir: Option<String> = None;
-    for d in &shards_dir_candidates {
-        if std::path::Path::new(d).exists() {
-            shards_dir = Some(d.to_string());
-            break;
+    for c in &candidates {
+        if std::path::Path::new(c).exists() {
+            return Some(std::path::PathBuf::from(c));
         }
     }
-    let Some(dir) = shards_dir else { return Vec::new() };
+    // Tauri 打包后通过 env 变量（由 ensure_naming_shards 写入）告知分片位置
+    if let Ok(p) = std::env::var("MX_NAMING_SHARDS_DIR") {
+        let path = std::path::PathBuf::from(p);
+        if path.exists() { return Some(path); }
+    }
+    None
+}
+
+/// 列出所有 sharded 数据库文件路径（按 source_type 或 valid_names）
+fn shard_paths() -> Vec<(String, String)> {
+    // 返回 (shard 名, 数据库路径) 列表
+    let Some(dir) = resolve_naming_data_dir() else { return Vec::new() };
     let mut out = Vec::new();
     if let Ok(rd) = std::fs::read_dir(&dir) {
         for e in rd.flatten() {
@@ -1378,11 +1388,56 @@ fn get_stroke_from_stoke(ch: char) -> Option<i64> {
     None
 }
 
+/// 应用启动时把内置分片 SQLite 复制到 app_data_dir
+/// （Tauri 打包后 CWD 不是项目根，需要稳定的可写位置）
+fn ensure_naming_shards(app: &tauri::AppHandle) {
+    let Ok(dir) = app.path().app_data_dir() else { return };
+    let target = dir.join("naming-data").join("shards");
+    if target.exists() && std::fs::read_dir(&target).map(|d| d.count() > 0).unwrap_or(false) {
+        // 已有分片，确保环境变量被设置
+        std::env::set_var("MX_NAMING_SHARDS_DIR", &target);
+        return;
+    }
+    let _ = std::fs::create_dir_all(&target);
+    // 候选源目录：dev = public/naming-data/shards；prod = resource_dir
+    let mut candidates: Vec<String> = vec![
+        "public/naming-data/shards".to_string(),
+        "../public/naming-data/shards".to_string(),
+    ];
+    if let Ok(res_dir) = app.path().resource_dir() {
+        candidates.push(res_dir.join("public").join("naming-data").join("shards").to_string_lossy().to_string());
+        candidates.push(res_dir.join("_up_").join("naming-data").join("shards").to_string_lossy().to_string());
+        candidates.push(res_dir.join("naming-data").join("shards").to_string_lossy().to_string());
+    }
+    for src in &candidates {
+        let Ok(rd) = std::fs::read_dir(src) else { continue };
+        let mut copied = 0;
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("sqlite3") {
+                let Some(name) = p.file_name().and_then(|s| s.to_str()) else { continue };
+                if name == "index.json" { continue; }
+                let dest = target.join(name);
+                if std::fs::copy(&p, &dest).is_ok() { copied += 1; }
+            }
+        }
+        if copied > 0 {
+            eprintln!("[naming] 已从 {} 复制 {} 个分片到 {:?}", src, copied, target);
+            std::env::set_var("MX_NAMING_SHARDS_DIR", &target);
+            break;
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|app| {
+            ensure_naming_shards(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             cherry_models,
             cherry_chat_stream,
