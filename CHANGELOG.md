@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.2](https://github.com/TinggalLeaf/MingXuan/compare/v1.2.1...v1.2.2) (2026-08-18)
+
+
+### Bug Fixes
+
+* 起名数据库打包后找不到分片数据 ([0c867da](https://github.com/TinggalLeaf/MingXuan/commit/0c867da4994bf2bb26edea9698e228b2279bb23d))
+
 ## [1.2.1](https://github.com/TinggalLeaf/MingXuan/compare/v1.2.0...v1.2.1) (2026-08-18)
 
 
