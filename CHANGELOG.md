@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.1](https://github.com/TinggalLeaf/MingXuan/compare/v1.2.0...v1.2.1) (2026-08-18)
+
+
+### Bug Fixes
+
+* 恢复 pump_sse 流式解析，修复 AI 对话空白（[#6](https://github.com/TinggalLeaf/MingXuan/issues/6)） ([8eda673](https://github.com/TinggalLeaf/MingXuan/commit/8eda6733e59f2857698705a84a8527bbcc545230))
+* 恢复 pump_sse 的 SSE 流式解析，修复 AI 对话空白 ([e2336ec](https://github.com/TinggalLeaf/MingXuan/commit/e2336ec58d1fb4177098bfac130abdc15b217283)), closes [#6](https://github.com/TinggalLeaf/MingXuan/issues/6)
+
 ## [1.2.0](https://github.com/TinggalLeaf/MingXuan/compare/v1.1.0...v1.2.0) (2026-08-17)
 
 
