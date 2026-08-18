@@ -1090,6 +1090,7 @@ fn is_wuxing_good(s: &str) -> bool {
 fn stroke_db_path() -> String {
     // 简单查找：从常见位置找 pipiname.sqlite3（兼容旧版单文件）
     let candidates = [
+        "resources/naming-data/pipiname.sqlite3",
         "public/naming-data/pipiname.sqlite3",
         "../public/naming-data/pipiname.sqlite3",
         "naming-data/pipiname.sqlite3",
@@ -1102,10 +1103,13 @@ fn stroke_db_path() -> String {
     candidates[0].to_string()
 }
 
-/// 解析运行时数据目录：开发期 = CWD/public/naming-data/shards
+/// 解析运行时数据目录：开发期 = CWD/resources/naming-data/shards（tauri dev 的 CWD 是 src-tauri）
 /// Tauri 打包后 = app_data_dir/naming-data/shards（由 ensure_naming_shards 复制）
 fn resolve_naming_data_dir() -> Option<std::path::PathBuf> {
     let candidates = [
+        "resources/naming-data/shards",
+        "../resources/naming-data/shards",
+        // 兼容旧布局（数据曾放在 public/ 下）
         "public/naming-data/shards",
         "../public/naming-data/shards",
         "naming-data/shards",
@@ -1142,27 +1146,42 @@ fn shard_paths() -> Vec<(String, String)> {
     out
 }
 
-/// 打开一个连接，并把所有分片 ATTACH 为 shard_xxx 别名（按需）
+/// 打开一个连接，并把所有分片 ATTACH 为 sources_xxx / valid_names_x 别名
+///
+/// 注意两点：
+/// 1. 主连接用内存库。若以某个分片文件作为主库打开，该分片不会再有
+///    `sources_shijing.xxx` 这样的别名，按别名查询会静默跳过这个分片。
+/// 2. SQLite 默认最多 ATTACH 10 个库，而分片有 12 个，需要上调上限，
+///    否则排在后面的分片（含 valid_names）会 ATTACH 失败被静默忽略。
 fn open_with_shards() -> Result<Connection, String> {
-    // 优先从环境变量 / resolve_naming_data_dir 找到分片目录
-    let shards_dir = resolve_naming_data_dir();
-    let main_path = if let Some(dir) = &shards_dir {
-        let p = dir.join("sources-shijing.sqlite3");
-        if p.exists() {
-            p.to_string_lossy().to_string()
-        } else {
-            stroke_db_path()
-        }
-    } else {
-        stroke_db_path()
-    };
-    let conn = Connection::open(&main_path).map_err(|e| format!("打开主分片失败：{e}"))?;
     let shards = shard_paths();
-    for (alias, path) in &shards {
-        if path == &main_path { continue; }
-        let stmt = format!("ATTACH DATABASE '{}' AS {}", path.replace('\'', "''"), alias);
-        let _ = conn.execute(&stmt, []);
+    if shards.is_empty() {
+        // 兼容旧版单文件布局（无分片目录时直接打开 pipiname.sqlite3）
+        return Connection::open(stroke_db_path()).map_err(|e| format!("打开数据库失败：{e}"));
     }
+    let conn = Connection::open_in_memory().map_err(|e| format!("创建连接失败：{e}"))?;
+    conn.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_ATTACHED, 32);
+    let mut valid_names_aliases: Vec<String> = Vec::new();
+    for (alias, path) in &shards {
+        let stmt = format!("ATTACH DATABASE '{}' AS {}", path.replace('\'', "''"), alias);
+        if conn.execute(&stmt, []).is_ok() && alias.starts_with("valid_names_") {
+            valid_names_aliases.push(alias.clone());
+        }
+    }
+    // 常见姓名库被拆成 valid_names-N.sqlite3 多个分片；不带库名前缀的 `valid_names`
+    // 引用只会解析到其中一个分片，这里建一个 TEMP VIEW 把所有分片 UNION 起来，
+    // 让不带前缀的引用落到这张视图上（temp 对象优先于 attached 库解析）。
+    let view_sql = if valid_names_aliases.is_empty() {
+        "CREATE TEMP VIEW valid_names AS \
+         SELECT NULL AS name_simp, NULL AS gender, 0 AS stroke1, 0 AS stroke2 WHERE 0".to_string()
+    } else {
+        let unions: Vec<String> = valid_names_aliases
+            .iter()
+            .map(|a| format!("SELECT name_simp, gender, stroke1, stroke2 FROM {a}.valid_names"))
+            .collect();
+        format!("CREATE TEMP VIEW valid_names AS {}", unions.join(" UNION ALL "))
+    };
+    let _ = conn.execute(&view_sql, []);
     Ok(conn)
 }
 
@@ -1394,11 +1413,18 @@ fn name_lookup(name: String) -> Result<serde_json::Value, String> {
 
 fn get_stroke_from_stoke(ch: char) -> Option<i64> {
     use std::io::{BufRead, BufReader};
-    let p = "public/naming-data/stoke.dat";
-    let f = match std::fs::File::open(p) {
-        Ok(f) => f,
-        Err(_) => return None,
-    };
+    // 打包后 stoke.dat 由 ensure_naming_shards 复制到 app_data_dir 并写入环境变量
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(p) = std::env::var("MX_NAMING_STOKE_FILE") {
+        candidates.push(std::path::PathBuf::from(p));
+    }
+    candidates.push(std::path::PathBuf::from("resources/naming-data/stoke.dat"));
+    candidates.push(std::path::PathBuf::from("../resources/naming-data/stoke.dat"));
+    // 兼容旧布局（数据曾放在 public/ 下）
+    candidates.push(std::path::PathBuf::from("public/naming-data/stoke.dat"));
+    let f = candidates
+        .iter()
+        .find_map(|p| std::fs::File::open(p).ok())?;
     let target = ch.to_string();
     for line in BufReader::new(f).lines().map_while(Result::ok) {
         let parts: Vec<&str> = line.split('|').collect();
@@ -1409,7 +1435,7 @@ fn get_stroke_from_stoke(ch: char) -> Option<i64> {
     None
 }
 
-/// 应用启动时把内置分片 SQLite 复制到 app_data_dir
+/// 应用启动时把内置分片 SQLite + stoke.dat 复制到 app_data_dir
 /// （Tauri 打包后 CWD 不是项目根，需要稳定的可写位置）
 fn ensure_naming_shards(app: &tauri::AppHandle) {
     let Ok(dir) = app.path().app_data_dir() else { return };
@@ -1417,18 +1443,27 @@ fn ensure_naming_shards(app: &tauri::AppHandle) {
     if target.exists() && std::fs::read_dir(&target).map(|d| d.count() > 0).unwrap_or(false) {
         // 已有分片，确保环境变量被设置
         std::env::set_var("MX_NAMING_SHARDS_DIR", &target);
+        let stoke = dir.join("naming-data").join("stoke.dat");
+        if stoke.exists() {
+            std::env::set_var("MX_NAMING_STOKE_FILE", &stoke);
+        }
         return;
     }
     let _ = std::fs::create_dir_all(&target);
-    // 候选源目录：dev = public/naming-data/shards；prod = resource_dir
-    let mut candidates: Vec<String> = vec![
-        "public/naming-data/shards".to_string(),
-        "../public/naming-data/shards".to_string(),
+    // 候选源目录：dev = src-tauri/resources/naming-data/shards；prod = resource_dir/naming-data/shards
+    // （tauri.conf.json 里 bundle.resources 把分片映射到了 resource_dir/naming-data/shards）
+    let mut candidates: Vec<std::path::PathBuf> = vec![
+        std::path::PathBuf::from("resources/naming-data/shards"),
+        std::path::PathBuf::from("../resources/naming-data/shards"),
+        // 兼容旧布局（数据曾放在 public/ 下）
+        std::path::PathBuf::from("public/naming-data/shards"),
+        std::path::PathBuf::from("../public/naming-data/shards"),
     ];
     if let Ok(res_dir) = app.path().resource_dir() {
-        candidates.push(res_dir.join("public").join("naming-data").join("shards").to_string_lossy().to_string());
-        candidates.push(res_dir.join("_up_").join("naming-data").join("shards").to_string_lossy().to_string());
-        candidates.push(res_dir.join("naming-data").join("shards").to_string_lossy().to_string());
+        candidates.push(res_dir.join("naming-data").join("shards"));
+        candidates.push(res_dir.join("public").join("naming-data").join("shards"));
+        candidates.push(res_dir.join("_up_").join("public").join("naming-data").join("shards"));
+        candidates.push(res_dir.join("_up_").join("naming-data").join("shards"));
     }
     for src in &candidates {
         let Ok(rd) = std::fs::read_dir(src) else { continue };
@@ -1437,14 +1472,21 @@ fn ensure_naming_shards(app: &tauri::AppHandle) {
             let p = entry.path();
             if p.extension().and_then(|s| s.to_str()) == Some("sqlite3") {
                 let Some(name) = p.file_name().and_then(|s| s.to_str()) else { continue };
-                if name == "index.json" { continue; }
                 let dest = target.join(name);
                 if std::fs::copy(&p, &dest).is_ok() { copied += 1; }
             }
         }
         if copied > 0 {
-            eprintln!("[naming] 已从 {} 复制 {} 个分片到 {:?}", src, copied, target);
+            eprintln!("[naming] 已从 {} 复制 {} 个分片到 {:?}", src.display(), copied, target);
             std::env::set_var("MX_NAMING_SHARDS_DIR", &target);
+            // stoke.dat 与 shards 同级
+            if let Some(data_dir) = src.parent() {
+                let stoke_src = data_dir.join("stoke.dat");
+                let stoke_dest = dir.join("naming-data").join("stoke.dat");
+                if stoke_src.exists() && std::fs::copy(&stoke_src, &stoke_dest).is_ok() {
+                    std::env::set_var("MX_NAMING_STOKE_FILE", &stoke_dest);
+                }
+            }
             break;
         }
     }
@@ -1454,6 +1496,7 @@ fn ensure_naming_shards(app: &tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             ensure_naming_shards(app.handle());
@@ -1475,9 +1518,30 @@ pub fn run() {
             huangli_lookup,
             name_search,
             name_lookup,
+            save_print_html,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// 把打印报告 HTML 写入临时目录，返回文件路径。
+/// 桌面端 PDF 导出流程：前端生成完整 HTML → 本命令落盘 →
+/// plugin-opener 用系统默认浏览器打开（用户在其中「另存为 PDF」）。
+/// WebView2 下 window.open 不可靠，故不走浏览器弹窗。
+#[tauri::command]
+fn save_print_html(html: String) -> Result<String, String> {
+    let dir = std::env::temp_dir().join("mingxuan-print");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建临时目录失败：{e}"))?;
+    let path = dir.join(format!("report-{}.html", chrono_timestamp()));
+    std::fs::write(&path, html).map_err(|e| format!("写入打印文件失败：{e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+fn chrono_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// 简易 URL 编码

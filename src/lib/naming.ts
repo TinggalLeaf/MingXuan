@@ -2,7 +2,8 @@
  * 起名 · 三才五格 + 古诗文（基于 PiPiName 全量本地索引）
  *
  * 数据流：所有古籍数据（48 万句诗经/楚辞/论语/周易/唐诗/宋诗/宋词 + 29 万常见姓名 + 82 万候选名）
- * 已构建为 SQLite 索引 public/naming-data/pipiname.sqlite3（252 MB）。
+ * 已构建为 SQLite 分片索引 src-tauri/resources/naming-data/shards/*.sqlite3（约 126 MB），
+ * 打包时通过 tauri.conf.json 的 bundle.resources 映射到 resource_dir/naming-data/shards。
  *
  * 前端不直接加载数据库，通过 Tauri Rust 命令（name_search / name_lookup）查询：
  *   - 避免 250 MB 资源进 bundle

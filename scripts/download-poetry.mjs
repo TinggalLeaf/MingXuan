@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 下载 PiPiName / chinese-poetry 全量古诗文到 public/naming-data/
+ * 下载 PiPiName / chinese-poetry 全量古诗文到 src-tauri/resources/naming-data/
  *
  * 来源：
  *   - https://github.com/NanBox/PiPiName/tree/master/data
@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const OUT = path.resolve(__dirname, "../public/naming-data");
+const OUT = path.resolve(__dirname, "../src-tauri/resources/naming-data");
 fs.mkdirSync(OUT, { recursive: true });
 
 const BASE = "https://raw.githubusercontent.com/NanBox/PiPiName/master/data";

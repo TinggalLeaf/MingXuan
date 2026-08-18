@@ -2,12 +2,12 @@
 /**
  * 构建起名系统用「短语 → 出处」索引
  *
- * 数据源：public/naming-data/{诗经,楚辞,论语,周易,唐诗,宋诗,宋词}
+ * 数据源：src-tauri/resources/naming-data/{诗经,楚辞,论语,周易,唐诗,宋诗,宋词}
  *
  * 流程：对每首诗的每行，提取所有 2 字 CJK 子串，合并重复，
  *       每个 2 字短语只保留一条代表性出处（优先级：诗经 > 楚辞 > 论语 > 周易 > 唐诗 > 宋诗 > 宋词）。
  *
- * 输出：public/naming-data/phrases-index.json
+ * 输出：src-tauri/resources/naming-data/phrases-index.json
  *       格式：[ {phrase, source, title, author, sentence} ]
  */
 
@@ -16,7 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA = path.resolve(__dirname, "../public/naming-data");
+const DATA = path.resolve(__dirname, "../src-tauri/resources/naming-data");
 const OUT = path.join(DATA, "phrases-index.json");
 
 const SOURCE_FILE = {

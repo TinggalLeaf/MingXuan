@@ -34,4 +34,4 @@ vite.config.d.ts
 
 # Claude / Playwright MCP transient
 .playwright-mcp/
-public/naming-data/pipiname.sqlite3
+src-tauri/resources/naming-data/pipiname.sqlite3

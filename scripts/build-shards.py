@@ -2,8 +2,8 @@
 """Build sqlite3 shards from SQL dump files."""
 import sqlite3, os, sys, json, glob
 
-src_dir = 'public/naming-data/shards_sql'
-dst_dir = 'public/naming-data/shards'
+src_dir = 'src-tauri/resources/naming-data/shards_sql'
+dst_dir = 'src-tauri/resources/naming-data/shards'
 os.makedirs(dst_dir, exist_ok=True)
 
 # Clean dst
