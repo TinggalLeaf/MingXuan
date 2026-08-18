@@ -6,7 +6,7 @@
 //!    同时保留自定义 OpenAI 兼容服务转发（规避 Webview CORS）。
 //! 2. 命盘存档读写（应用数据目录下的 profiles.json）。
 
-// use futures_util::StreamExt; // 暂未使用（pump_sse 不再调用 .next()）
+use futures_util::StreamExt;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -308,8 +308,26 @@ async fn ai_chat_stream(
 
 /// 把 SSE 响应逐行解析，data 载荷经 Channel 推给前端（"[DONE]" 表示结束）
 async fn pump_sse(res: reqwest::Response, on_event: Channel<String>) -> Result<(), String> {
-    // 已由上面的通用 pump_sse 实现
-    let _ = (res, on_event);
+    let mut stream = res.bytes_stream();
+    let mut buf = String::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("流读取失败：{e}"))?;
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(pos) = buf.find('\n') {
+            let line = buf[..pos].trim().to_string();
+            buf = buf[pos + 1..].to_string();
+            if let Some(payload) = line.strip_prefix("data:") {
+                let payload = payload.trim();
+                if payload.is_empty() {
+                    continue;
+                }
+                on_event
+                    .send(payload.to_string())
+                    .map_err(|e| format!("通道推送失败：{e}"))?;
+            }
+        }
+    }
+    let _ = on_event.send("[DONE]".to_string());
     Ok(())
 }
 
