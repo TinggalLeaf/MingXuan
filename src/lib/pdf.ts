@@ -1,21 +1,17 @@
 /**
  * PDF 导出工具
  *
- * 基于浏览器原生打印 API（window.print()）生成 PDF — 不引入第三方库。
- * 流程：
- *   1. 调用 openPrintWindow(html, title) → 打开打印专用窗口
- *   2. 窗口加载后自动调用 window.print()，用户选择"另存为 PDF"
+ * 流程：生成完整打印 HTML → 用系统浏览器打开 → 用户「另存为 PDF」。
+ *   - Tauri 桌面端：经 Rust 命令 save_print_html 写入临时文件，
+ *     再由 plugin-opener 用系统默认浏览器打开（WebView2 里 window.open 不可靠）。
+ *   - 浏览器开发态：退化为 window.open 打印专用窗口。
  *
- * 适用场景：
- *   - 排盘（八字/紫微/星盘/合盘/...）
- *   - AI 解读报告
- *   - 周公解梦详情
- *   - 黄历查询结果
- *
- * 所有打印模板统一应用 mx-print 样式（@media print 规则已嵌入 index.css）。
+ * 适用场景：排盘（八字/紫微/星盘/合盘/...）、AI 解读报告、周公解梦详情、黄历查询。
  */
 
-import React from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { isTauri } from "./ai";
+import { alertInfo } from "./dialog";
 
 export interface PrintOptions {
   title?: string;
@@ -28,26 +24,44 @@ export interface PrintOptions {
 }
 
 /**
- * 把 React 节点序列化为 HTML 字符串后送入打印窗口。
- * 该函数主要在 React 渲染管线之外被调用，传入已渲染好的 HTML 字符串即可。
+ * 把已渲染好的 HTML 片段包装成完整打印文档并打开。
+ * Tauri 下异步落盘 + 系统浏览器打开；浏览器下新开打印窗口。
  */
-export function openPrintWindow(html: string, opts: PrintOptions = {}) {
+export async function openPrintWindow(html: string, opts: PrintOptions = {}): Promise<void> {
+  const doc = buildPrintDocument(html, opts);
+
+  if (isTauri) {
+    try {
+      const path = await invoke<string>("save_print_html", { html: doc });
+      const { openPath } = await import("@tauri-apps/plugin-opener");
+      await openPath(path);
+    } catch (e) {
+      await alertInfo(`导出失败：${(e as Error).message}`, { title: "PDF 导出", kind: "error" });
+    }
+    return;
+  }
+
+  const w = window.open("", "_blank", "width=900,height=1200");
+  if (!w) {
+    await alertInfo("浏览器拦截了弹窗，请允许本站点弹窗后再试。", { title: "PDF 导出" });
+    return;
+  }
+  w.document.open();
+  w.document.write(doc);
+  w.document.close();
+}
+
+/** 组装完整打印 HTML 文档（含全局样式、封面与页脚） */
+function buildPrintDocument(html: string, opts: PrintOptions): string {
   const title = opts.title || "明玄 · 排盘报告";
   const subtitle = opts.subtitle || "";
   const extra = opts.extraCss || "";
   const auto = opts.autoPrint !== false;
 
-  const w = window.open("", "_blank", "width=900,height=1200");
-  if (!w) {
-    alert("浏览器拦截了弹窗，请允许本站点弹窗后再试。");
-    return;
-  }
-
   // 取一份父页面已加载的全局样式（颜色变量、字体、.md 等），保证打印效果一致
   const parentCss = collectParentCss();
 
-  w.document.open();
-  w.document.write(`<!doctype html>
+  return `<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
@@ -149,15 +163,7 @@ ${extra}
     ${auto ? `window.addEventListener('load', () => setTimeout(() => window.print(), 250));` : ""}
   </script>
 </body>
-</html>`);
-  w.document.close();
-}
-
-/** 包装 React 节点 → 序列化为 HTML 字符串（使用 dangerouslySetInnerHTML 等价） */
-export function reactToHtml(node: React.ReactNode): string {
-  // 这里不强求真实 SSR；调用方应直接提供 HTML 字符串
-  // 仅作为占位/兼容入口
-  return typeof node === "string" ? node : "";
+</html>`;
 }
 
 /** 抓取父页面 <style> 内容（@theme 变量、字体、.md 等） */
@@ -181,19 +187,8 @@ function escape(s: string): string {
   return s.replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" }[c]!));
 }
 
-/** 一站式：传入标题 + HTML 段落，弹出打印窗口 */
-export function printReport(title: string, subtitle: string, sections: { heading: string; body: string }[]) {
-  const html = sections
-    .map((s) => `<section class="mx-print-section"><h2>${escape(s.heading)}</h2><div>${s.body}</div></section>`)
-    .join("");
-  openPrintWindow(html, { title, subtitle });
-}
-
-/** Markdown → 用于 PDF 的格式化 HTML（依赖同进程 parseMarkdown 与 MarkdownLite）
- * 调用方需自行把解析后的 Block[] 转 HTML（直接复用 src/lib/dream 的内容）
- */
+/** Markdown → 用于 PDF 的格式化 HTML（简化：保留段落分隔 + 加粗转 <strong>） */
 export function markdownToHtmlForPdf(text: string): string {
-  // 简化：保留段落分隔 + 加粗转 <strong>
   return text
     .split(/\n{2,}/)
     .map((b) => {

@@ -11,28 +11,28 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 
 const LS_KEY = "mingxuan.ai.settings";
 
-export type AiProvider = "builtin" | "kilo" | "kimi" | "custom";
+export const AI_SETTINGS_EVENT = "mx-ai-settings-changed";
 
-export interface AiSettings {
-  provider: AiProvider;
-  /** builtin: 固定 Cherry 上游；kilo/kimi/custom: OpenAI 兼容服务 */
+export type AiProvider = "builtin" | "kilo" | "kimi" | "custom";
+/** 需要 baseUrl/apiKey 的远程渠道（builtin 由 Rust 直连，无配置） */
+export type RemoteProvider = Exclude<AiProvider, "builtin">;
+
+/** 单个渠道的连接配置；各渠道互相独立，切换不互相覆盖 */
+export interface ProviderConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
-  /** builtin 模式下的模型展示名（Cherry 内置） */
-  builtinModel: string;
-  /** 上次拉取的模型列表缓存（仅 UI 展示用） */
-  cachedModels: string[];
 }
 
-export const AI_DEFAULTS: AiSettings = {
-  provider: "builtin",
-  baseUrl: import.meta.env.VITE_AI_BASE_URL || "http://localhost:8000",
-  apiKey: import.meta.env.VITE_AI_API_KEY || "",
-  model: import.meta.env.VITE_AI_MODEL || "qwen-8b",
-  builtinModel: "qwen-8b",
-  cachedModels: [],
-};
+export interface AiSettings {
+  provider: AiProvider;
+  /** builtin 模式下的模型展示名（Cherry 内置） */
+  builtinModel: string;
+  /** kilo / kimi / custom 各自独立的配置 */
+  providers: Record<RemoteProvider, ProviderConfig>;
+  /** 上次拉取的模型列表缓存（仅 UI 展示用，对应当前渠道） */
+  cachedModels: string[];
+}
 
 export const BUILTIN_MODELS = ["qwen-8b"];
 
@@ -62,27 +62,118 @@ export const PROVIDER_DEFAULTS: Record<AiProvider, { baseUrl: string; label: str
   },
 };
 
-/** 是否运行在 Tauri 桌面环境 */
-export const isTauri =
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+function defaultProviders(): Record<RemoteProvider, ProviderConfig> {
+  return {
+    kilo: {
+      baseUrl: PROVIDER_DEFAULTS.kilo.baseUrl,
+      apiKey: "",
+      model: "x-ai/grok-code-fast-1:optimized:free",
+    },
+    kimi: {
+      baseUrl: PROVIDER_DEFAULTS.kimi.baseUrl,
+      apiKey: "",
+      model: "moonshotai/kimi-k2",
+    },
+    custom: {
+      baseUrl: import.meta.env?.VITE_AI_BASE_URL || PROVIDER_DEFAULTS.custom.baseUrl,
+      apiKey: import.meta.env?.VITE_AI_API_KEY || "",
+      model: import.meta.env?.VITE_AI_MODEL || "qwen-8b",
+    },
+  };
+}
+
+export const AI_DEFAULTS: AiSettings = {
+  provider: "builtin",
+  builtinModel: "qwen-8b",
+  providers: defaultProviders(),
+  cachedModels: [],
+};
+
+function isRemoteProvider(p: unknown): p is RemoteProvider {
+  return p === "kilo" || p === "kimi" || p === "custom";
+}
+
+function isProvider(p: unknown): p is AiProvider {
+  return p === "builtin" || isRemoteProvider(p);
+}
+
+/**
+ * 把任意历史版本的存储数据规整为当前 AiSettings 结构。
+ * 旧版（v1）把 baseUrl/apiKey/model 平铺在顶层且所有渠道共用，
+ * 迁移时归入其当时激活的渠道（builtin 则归入 custom），其余渠道用默认值。
+ */
+export function migrateAiSettings(raw: unknown): AiSettings {
+  const out: AiSettings = {
+    provider: "builtin",
+    builtinModel: "qwen-8b",
+    providers: defaultProviders(),
+    cachedModels: [],
+  };
+  if (!raw || typeof raw !== "object") return out;
+  const r = raw as Record<string, unknown>;
+
+  if (isProvider(r.provider)) out.provider = r.provider;
+  if (typeof r.builtinModel === "string" && r.builtinModel) out.builtinModel = r.builtinModel;
+  if (Array.isArray(r.cachedModels)) {
+    out.cachedModels = r.cachedModels.filter((m): m is string => typeof m === "string");
+  }
+
+  // 新版结构：providers 逐渠道合并
+  if (r.providers && typeof r.providers === "object") {
+    for (const [key, value] of Object.entries(r.providers as Record<string, unknown>)) {
+      if (!isRemoteProvider(key) || !value || typeof value !== "object") continue;
+      const v = value as Record<string, unknown>;
+      out.providers[key] = {
+        baseUrl: typeof v.baseUrl === "string" ? v.baseUrl : out.providers[key].baseUrl,
+        apiKey: typeof v.apiKey === "string" ? v.apiKey : out.providers[key].apiKey,
+        model: typeof v.model === "string" ? v.model : out.providers[key].model,
+      };
+    }
+  }
+
+  // 旧版平铺字段 → 归入对应渠道
+  if (typeof r.baseUrl === "string" || typeof r.model === "string" || typeof r.apiKey === "string") {
+    const target: RemoteProvider = isRemoteProvider(r.provider) ? r.provider : "custom";
+    const cur = out.providers[target];
+    out.providers[target] = {
+      baseUrl: typeof r.baseUrl === "string" && r.baseUrl ? r.baseUrl : cur.baseUrl,
+      apiKey: typeof r.apiKey === "string" ? r.apiKey : cur.apiKey,
+      model: typeof r.model === "string" && r.model ? r.model : cur.model,
+    };
+  }
+  return out;
+}
+
+/** 当前激活渠道的实际连接配置（builtin 返回空 baseUrl + builtinModel） */
+export function activeProviderConfig(s: AiSettings): ProviderConfig {
+  if (s.provider === "builtin") {
+    return { baseUrl: "", apiKey: "", model: s.builtinModel };
+  }
+  return s.providers[s.provider];
+}
 
 export function loadAiSettings(): AiSettings {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    if (raw) return { ...AI_DEFAULTS, ...JSON.parse(raw) };
+    if (raw) return migrateAiSettings(JSON.parse(raw));
   } catch {
     /* ignore */
   }
-  return { ...AI_DEFAULTS };
+  return { ...AI_DEFAULTS, providers: defaultProviders() };
 }
 
 export function saveAiSettings(s: AiSettings) {
   localStorage.setItem(LS_KEY, JSON.stringify(s));
+  window.dispatchEvent(new CustomEvent(AI_SETTINGS_EVENT, { detail: s }));
 }
 
 export function normalizeBaseUrl(url: string): string {
   return url.trim().replace(/\/+$/, "").replace(/\/v1$/, "");
 }
+
+/** 是否运行在 Tauri 桌面环境 */
+export const isTauri =
+  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -96,14 +187,15 @@ export async function fetchAiModels(s: AiSettings): Promise<string[]> {
     if (isTauri) return invoke<string[]>("cherry_models");
     return BUILTIN_MODELS;
   }
+  const cfg = activeProviderConfig(s);
   if (isTauri) {
     // Kilo 与 Kimi 由 Rust 后端直接代理云端 API，前端不需要用户启动本地服务
     if (s.provider === "kilo") return invoke<string[]>("kilo_models");
     if (s.provider === "kimi") return invoke<string[]>("kimi_models");
-    return invoke<string[]>("ai_models", { baseUrl: s.baseUrl, apiKey: s.apiKey });
+    return invoke<string[]>("ai_models", { baseUrl: cfg.baseUrl, apiKey: cfg.apiKey });
   }
-  const res = await fetch(`${normalizeBaseUrl(s.baseUrl)}/v1/models`, {
-    headers: s.apiKey ? { Authorization: `Bearer ${s.apiKey}` } : {},
+  const res = await fetch(`${normalizeBaseUrl(cfg.baseUrl)}/v1/models`, {
+    headers: cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {},
     signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) throw new Error(`模型列表请求失败：HTTP ${res.status}`);
@@ -123,17 +215,18 @@ export async function chatStream(
     if (isTauri) return streamViaRust("cherry_chat_stream", { model: s.builtinModel, messages }, onChunk);
     return streamViaBrowserCherry(s.builtinModel, messages, onChunk, signal);
   }
+  const cfg = activeProviderConfig(s);
   if (isTauri) {
     // Kilo 与 Kimi 走 Rust 后端直连云端，无需用户启动本地服务
     if (s.provider === "kilo") {
-      return streamViaRust("kilo_chat_stream", { model: s.model, messages }, onChunk);
+      return streamViaRust("kilo_chat_stream", { model: cfg.model, messages }, onChunk);
     }
     if (s.provider === "kimi") {
-      return streamViaRust("kimi_chat_stream", { model: s.model, messages }, onChunk);
+      return streamViaRust("kimi_chat_stream", { model: cfg.model, messages }, onChunk);
     }
     return streamViaRust(
       "ai_chat_stream",
-      { baseUrl: s.baseUrl, apiKey: s.apiKey, model: s.model, messages },
+      { baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model, messages },
       onChunk
     );
   }
@@ -167,13 +260,14 @@ async function streamViaBrowserFetch(
   onChunk: (delta: string, full: string) => void,
   signal?: AbortSignal
 ): Promise<string> {
-  const res = await fetch(`${normalizeBaseUrl(s.baseUrl)}/v1/chat/completions`, {
+  const cfg = activeProviderConfig(s);
+  const res = await fetch(`${normalizeBaseUrl(cfg.baseUrl)}/v1/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(s.apiKey ? { Authorization: `Bearer ${s.apiKey}` } : {}),
+      ...(cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {}),
     },
-    body: JSON.stringify({ model: s.model, messages, stream: true, temperature: 0.7 }),
+    body: JSON.stringify({ model: cfg.model, messages, stream: true, temperature: 0.7 }),
     signal,
   });
   if (!res.ok) {
@@ -285,20 +379,23 @@ function parseDelta(payload: string): string {
   }
 }
 
-/** 免配置兜底：自定义模式下若模型不可用，自动选第一个可用模型 */
+/** 免配置兜底：远程渠道下若所选模型不可用，自动选第一个可用模型 */
 export async function resolveUsableSettings(): Promise<AiSettings> {
   const s = loadAiSettings();
-  if (s.provider !== "builtin") {
-    try {
-      const models = await fetchAiModels(s);
-      if (models.length > 0 && !models.includes(s.model)) {
-        const next = { ...s, model: models[0] };
-        saveAiSettings(next);
-        return next;
-      }
-    } catch {
-      /* 服务未启动等情况，交给调用方报错 */
+  if (s.provider === "builtin") return s;
+  try {
+    const models = await fetchAiModels(s);
+    const cfg = activeProviderConfig(s);
+    if (models.length > 0 && !models.includes(cfg.model)) {
+      const next: AiSettings = {
+        ...s,
+        providers: { ...s.providers, [s.provider]: { ...cfg, model: models[0] } },
+      };
+      saveAiSettings(next);
+      return next;
     }
+  } catch {
+    /* 服务未启动等情况，交给调用方报错 */
   }
   return s;
 }

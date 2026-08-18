@@ -21,14 +21,18 @@ import Wuyun from "@/pages/zhanbu/Wuyun";
 import Tarot from "@/pages/zhanbu/Tarot";
 import Lingqian from "@/pages/zhanbu/Lingqian";
 import Dream from "@/pages/Dream";
-import Settings from "@/pages/Settings";
+import Settings from "@/pages/settings";
 import Naming from "@/pages/Naming";
 import Updater from "@/components/updater/Updater";
+import ToastHost from "@/components/common/ToastHost";
+import PromptHost from "@/components/common/PromptHost";
 
 export default function App() {
   return (
     <HashRouter>
       <Updater />
+      <ToastHost />
+      <PromptHost />
       <Routes>
         <Route element={<ConsoleShell />}>
           <Route path="/" element={<Home />} />

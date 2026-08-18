@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Download, X, RefreshCw } from "lucide-react";
+import { alertInfo } from "@/lib/dialog";
 
 interface UpdateInfo {
   available: boolean;
@@ -92,7 +93,7 @@ export default function Updater() {
       // Rust 端会自动重启应用
       trigger.current = Date.now();
     } catch (e) {
-      alert(`更新失败：${(e as Error).message}`);
+      await alertInfo(`更新失败：${(e as Error).message}`, { title: "应用更新", kind: "error" });
     } finally {
       setInstalling(false);
     }

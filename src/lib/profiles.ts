@@ -78,6 +78,32 @@ export function deleteProfile(id: string) {
   persist(loadProfiles().filter((p) => p.id !== id));
 }
 
+/**
+ * 从备份导入命盘列表（整体替换）。
+ * 走统一的 persist 通道：更新内存缓存、localStorage 与 Tauri 磁盘存档，
+ * 避免直接写 localStorage 导致桌面端数据不同步。
+ * 返回实际导入的条数；数据不合法时抛错。
+ */
+export function importProfiles(raw: unknown): number {
+  if (!Array.isArray(raw)) throw new Error("命盘数据格式不正确（应为数组）");
+  const list: SavedProfile[] = raw
+    .filter((p): p is SavedProfile =>
+      !!p && typeof p === "object" &&
+      typeof (p as SavedProfile).id === "string" &&
+      typeof (p as SavedProfile).label === "string" &&
+      !!(p as SavedProfile).profile,
+    )
+    .map((p) => ({
+      id: p.id,
+      label: p.label,
+      relation: p.relation ?? "其他",
+      profile: p.profile,
+      createdAt: typeof p.createdAt === "number" ? p.createdAt : Date.now(),
+    }));
+  persist(list);
+  return list.length;
+}
+
 /** 命盘摘要（列表展示用） */
 export function profileSummary(p: BirthProfile): string {
   const cal = p.calendarType === "lunar" ? "农历" : "公历";
